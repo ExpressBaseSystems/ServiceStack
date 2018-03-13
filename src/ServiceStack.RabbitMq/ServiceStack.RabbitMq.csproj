@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFrameworks>net451;netstandard2.0</TargetFrameworks>
+        <TargetFrameworks>netstandard2.0</TargetFrameworks>
         <AssemblyName>ServiceStack.RabbitMq</AssemblyName>
         <PackageId>ServiceStack.RabbitMq</PackageId>
         <GenerateAssemblyTitleAttribute>false</GenerateAssemblyTitleAttribute>
@@ -22,29 +22,15 @@
 
     <ItemGroup>
         <PackageReference Include="RabbitMQ.Client" Version="5.0.1" />
+        <ProjectReference Include="..\..\..\ServiceStack.Text\src\ServiceStack.Text\ServiceStack.Text.csproj" />
         <ProjectReference Include="..\ServiceStack.Interfaces\ServiceStack.Interfaces.csproj" />
         <ProjectReference Include="..\ServiceStack.Client\ServiceStack.Client.csproj" />
         <ProjectReference Include="..\ServiceStack.Common\ServiceStack.Common.csproj" />
         <ProjectReference Include="..\ServiceStack\ServiceStack.csproj" />
     </ItemGroup>
 
-    <PropertyGroup Condition=" '$(TargetFramework)' == 'net451' ">
-        <DefineConstants>$(DefineConstants);NET45</DefineConstants>
-        <SignAssembly>True</SignAssembly>
-        <DelaySign>False</DelaySign>
-        <AssemblyOriginatorKeyFile>../servicestack.snk</AssemblyOriginatorKeyFile>
-    </PropertyGroup>
-
-    <ItemGroup Condition=" '$(TargetFramework)' == 'net451' ">
-        <Reference Include="..\..\lib\net45\ServiceStack.Text.dll" />
-    </ItemGroup>
-
     <PropertyGroup Condition=" '$(TargetFramework)' == 'netstandard2.0' ">
         <DefineConstants>$(DefineConstants);NETSTANDARD2_0</DefineConstants>
     </PropertyGroup>
-
-    <ItemGroup Condition=" '$(TargetFramework)' == 'netstandard2.0' ">
-        <Reference Include="..\..\lib\netstandard2.0\ServiceStack.Text.dll" />
-    </ItemGroup>
 
 </Project>
