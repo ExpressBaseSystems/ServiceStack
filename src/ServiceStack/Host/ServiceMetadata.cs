@@ -84,8 +84,6 @@ namespace ServiceStack.Host
                 && x.ServiceType.FullName != "ServiceStack.Api.Swagger.SwaggerResourcesService"
                 && x.ServiceType.FullName != "ServiceStack.Api.OpenApi.OpenApiService"
                 && x.ServiceType.Name != "__AutoQueryServices");
-
-            LicenseUtils.AssertValidUsage(LicenseFeature.ServiceStack, QuotaType.Operations, nonCoreServicesCount);
         }
 
         public void AfterInit()

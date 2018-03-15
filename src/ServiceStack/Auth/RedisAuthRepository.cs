@@ -17,10 +17,11 @@ namespace ServiceStack.Auth
         where TUserAuth : class, IUserAuth
         where TUserAuthDetails : class, IUserAuthDetails
     {
-        private readonly IRedisClientManagerFacade factory;
+        protected readonly IRedisClientManagerFacade factory;
+        protected readonly IRedisClientsManager factory2;
 
         public RedisAuthRepository(IRedisClientsManager factory)
-            : this(new RedisClientManagerFacade(factory)) { }
+            : this(new RedisClientManagerFacade(factory)) { this.factory2 = factory; }
 
         public RedisAuthRepository(IRedisClientManagerFacade factory) { this.factory = factory; }
 
@@ -85,7 +86,7 @@ namespace ServiceStack.Auth
             }
         }
 
-        public IUserAuth UpdateUserAuth(IUserAuth existingUser, IUserAuth newUser, string password)
+        public virtual IUserAuth UpdateUserAuth(IUserAuth existingUser, IUserAuth newUser, string password)
         {
             newUser.ValidateNewUser(password);
 
@@ -123,7 +124,7 @@ namespace ServiceStack.Auth
             }
         }
 
-        public IUserAuth UpdateUserAuth(IUserAuth existingUser, IUserAuth newUser)
+        public virtual IUserAuth UpdateUserAuth(IUserAuth existingUser, IUserAuth newUser)
         {
             newUser.ValidateNewUser();
 
@@ -256,7 +257,7 @@ namespace ServiceStack.Auth
             return redis.As<IUserAuth>().GetById(longId);
         }
 
-        public IUserAuth GetUserAuth(string userAuthId)
+        public virtual IUserAuth GetUserAuth(string userAuthId)
         {
             using (var redis = factory.GetClient())
             {

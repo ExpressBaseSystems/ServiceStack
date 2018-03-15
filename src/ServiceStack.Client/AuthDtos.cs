@@ -262,6 +262,7 @@ namespace ServiceStack
         public ResponseStatus ResponseStatus { get; set; }
     }
 
+    [Route("/access-token")]
     [DataContract]
     public class GetAccessToken : IPost, IReturn<GetAccessTokenResponse>
     {

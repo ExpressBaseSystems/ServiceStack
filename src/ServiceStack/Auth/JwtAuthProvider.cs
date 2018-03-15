@@ -26,19 +26,19 @@ namespace ServiceStack.Auth
 
         public JwtAuthProvider(IAppSettings appSettings) : base(appSettings) { }
 
-        public override void Init(IAppSettings appSettings = null)
-        {
-            this.SetBearerTokenOnAuthenticateResponse = appSettings == null 
-                || appSettings.Get("jwt.SetBearerTokenOnAuthenticateResponse", true);
+        //public override void Init(IAppSettings appSettings = null)
+        //{
+        //    this.SetBearerTokenOnAuthenticateResponse = appSettings == null 
+        //        || appSettings.Get("jwt.SetBearerTokenOnAuthenticateResponse", true);
 
-            ServiceRoutes = new Dictionary<Type, string[]>
-            {
-                { typeof(ConvertSessionToTokenService), new[] { "/session-to-token" } },
-                { typeof(GetAccessTokenService), new[] { "/access-token" } },
-            };
+        //    ServiceRoutes = new Dictionary<Type, string[]>
+        //    {
+        //        { typeof(ConvertSessionToTokenService), new[] { "/session-to-token" } },
+        //        //{ typeof(GetAccessTokenService), new[] { "/access-token" } },
+        //    };
 
-            base.Init(appSettings);
-        }
+        //    base.Init(appSettings);
+        //}
 
         public void Execute(AuthFilterContext authContext)
         {
@@ -95,10 +95,10 @@ namespace ServiceStack.Auth
             return hashAlgoritm;
         }
 
-        public string CreateJwtBearerToken(IAuthSession session, IEnumerable<string> roles = null, IEnumerable<string> perms = null) =>
+        public virtual string CreateJwtBearerToken(IAuthSession session, IEnumerable<string> roles = null, IEnumerable<string> perms = null) =>
             CreateJwtBearerToken(null, session, roles, perms);
 
-        public string CreateJwtBearerToken(IRequest req, IAuthSession session, IEnumerable<string> roles = null, IEnumerable<string> perms = null)
+        public virtual string CreateJwtBearerToken(IRequest req, IAuthSession session, IEnumerable<string> roles = null, IEnumerable<string> perms = null)
         {
             var jwtPayload = CreateJwtPayload(session, Issuer, ExpireTokensIn, Audience, roles, perms);
             CreatePayloadFilter?.Invoke(jwtPayload, session);
@@ -275,7 +275,7 @@ namespace ServiceStack.Auth
             return header;
         }
 
-        public static JsonObject CreateJwtPayload(
+        public virtual JsonObject CreateJwtPayload(
             IAuthSession session, string issuer, TimeSpan expireIn, 
             string audience=null,
             IEnumerable<string> roles=null,
@@ -364,80 +364,80 @@ namespace ServiceStack.Auth
         }
     }
 
-    [DefaultRequest(typeof(GetAccessToken))]
-    public class GetAccessTokenService : Service
-    {
-        public object Any(GetAccessToken request)
-        {
-            var jwtAuthProvider = (JwtAuthProvider)AuthenticateService.GetRequiredJwtAuthProvider();
+    //[DefaultRequest(typeof(GetAccessToken))]
+    //public class GetAccessTokenService : Service
+    //{
+    //    public object Any(GetAccessToken request)
+    //    {
+    //        var jwtAuthProvider = (MyJwtAuthProvider)AuthenticateService.GetRequiredJwtAuthProvider();
 
-            if (jwtAuthProvider.RequireSecureConnection && !Request.IsSecureConnection)
-                throw HttpError.Forbidden(ErrorMessages.JwtRequiresSecureConnection);
+    //        if (jwtAuthProvider.RequireSecureConnection && !Request.IsSecureConnection)
+    //            throw HttpError.Forbidden(ErrorMessages.JwtRequiresSecureConnection);
 
-            if (string.IsNullOrEmpty(request.RefreshToken))
-                throw new ArgumentNullException(nameof(request.RefreshToken));
+    //        if (string.IsNullOrEmpty(request.RefreshToken))
+    //            throw new ArgumentNullException(nameof(request.RefreshToken));
 
-            JsonObject jwtPayload;
-            try
-            {
-                jwtPayload = jwtAuthProvider.GetVerifiedJwtPayload(Request, request.RefreshToken.Split('.'));
-            }
-            catch (ArgumentException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                throw new ArgumentException(ex.Message);
-            }
+    //        JsonObject jwtPayload;
+    //        try
+    //        {
+    //            jwtPayload = jwtAuthProvider.GetVerifiedJwtPayload(Request, request.RefreshToken.Split('.'));
+    //        }
+    //        catch (ArgumentException)
+    //        {
+    //            throw;
+    //        }
+    //        catch (Exception ex)
+    //        {
+    //            throw new ArgumentException(ex.Message);
+    //        }
 
-            jwtAuthProvider.AssertJwtPayloadIsValid(jwtPayload);
+    //        jwtAuthProvider.AssertJwtPayloadIsValid(jwtPayload);
 
-            if (jwtAuthProvider.ValidateRefreshToken != null && !jwtAuthProvider.ValidateRefreshToken(jwtPayload, Request))
-                throw new ArgumentException(ErrorMessages.RefreshTokenInvalid, nameof(request.RefreshToken));
+    //        if (jwtAuthProvider.ValidateRefreshToken != null && !jwtAuthProvider.ValidateRefreshToken(jwtPayload, Request))
+    //            throw new ArgumentException(ErrorMessages.RefreshTokenInvalid, nameof(request.RefreshToken));
 
-            var userId = jwtPayload["sub"];
+    //        var userId = jwtPayload["sub"];
 
-            IAuthSession session;
-            IEnumerable<string> roles = null, perms = null;
+    //        IAuthSession session;
+    //        IEnumerable<string> roles = null, perms = null;
 
-            var userSessionSource = AuthenticateService.GetUserSessionSource();
-            if (userSessionSource != null)
-            {
-                session = userSessionSource.GetUserSession(userId);
-                if (session == null)
-                    throw HttpError.NotFound(ErrorMessages.UserNotExists);
+    //        var userSessionSource = AuthenticateService.GetUserSessionSource();
+    //        if (userSessionSource != null)
+    //        {
+    //            session = userSessionSource.GetUserSession(userId);
+    //            if (session == null)
+    //                throw HttpError.NotFound(ErrorMessages.UserNotExists);
 
-                roles = session.Roles;
-                perms = session.Permissions;
-            }
-            else if (AuthRepository is IUserAuthRepository userRepo)
-            {
-                var userAuth = userRepo.GetUserAuth(userId);
-                if (userAuth == null)
-                    throw HttpError.NotFound(ErrorMessages.UserNotExists);
+    //            roles = session.Roles;
+    //            perms = session.Permissions;
+    //        }
+    //        else if (AuthRepository is IUserAuthRepository userRepo)
+    //        {
+    //            var userAuth = userRepo.GetUserAuth(userId);
+    //            if (userAuth == null)
+    //                throw HttpError.NotFound(ErrorMessages.UserNotExists);
 
-                if (jwtAuthProvider.IsAccountLocked(userRepo, userAuth))
-                    throw new AuthenticationException(ErrorMessages.UserAccountLocked);
+    //            if (jwtAuthProvider.IsAccountLocked(userRepo, userAuth))
+    //                throw new AuthenticationException(ErrorMessages.UserAccountLocked);
 
-                session = SessionFeature.CreateNewSession(Request, SessionExtensions.CreateRandomSessionId());
-                jwtAuthProvider.PopulateSession(userRepo, userAuth, session);
+    //            session = SessionFeature.CreateNewSession(Request, SessionExtensions.CreateRandomSessionId());
+    //            jwtAuthProvider.PopulateSession(userRepo, userAuth, session);
 
-                if (userRepo is IManageRoles manageRoles && session.UserAuthId != null)
-                {
-                    roles = manageRoles.GetRoles(session.UserAuthId);
-                    perms = manageRoles.GetPermissions(session.UserAuthId);
-                }
-            }
-            else
-                throw new NotSupportedException("JWT RefreshTokens requires a registered IUserAuthRepository or an AuthProvider implementing IUserSessionSource");
+    //            if (userRepo is IManageRoles manageRoles && session.UserAuthId != null)
+    //            {
+    //                roles = manageRoles.GetRoles(session.UserAuthId);
+    //                perms = manageRoles.GetPermissions(session.UserAuthId);
+    //            }
+    //        }
+    //        else
+    //            throw new NotSupportedException("JWT RefreshTokens requires a registered IUserAuthRepository or an AuthProvider implementing IUserSessionSource");
 
-            var accessToken = jwtAuthProvider.CreateJwtBearerToken(Request, session, roles, perms);
+    //        var accessToken = jwtAuthProvider.CreateJwtBearerToken(Request, session, roles, perms);
 
-            return new GetAccessTokenResponse
-            {
-                AccessToken = accessToken
-            };
-        }
-    }
+    //        return new GetAccessTokenResponse
+    //        {
+    //            AccessToken = accessToken
+    //        };
+    //    }
+    //}
 }

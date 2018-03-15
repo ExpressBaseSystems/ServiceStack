@@ -73,20 +73,9 @@ namespace ServiceStack
 
                 //Set VirtualFiles to point to ContentRootPath (Project Folder)
                 VirtualFiles = new FileSystemVirtualFiles(env.ContentRootPath);
-                RegisterLicenseFromAppSettings(AppSettings);
             }
         }
 
-        public static void RegisterLicenseFromAppSettings(IAppSettings appSettings)
-        {
-            //Automatically register license key stored in <appSettings/>
-            var licenceKeyText = appSettings.GetString(NetStandardPclExport.AppSettingsKey);
-            if (!string.IsNullOrEmpty(licenceKeyText))
-            {
-                LicenseUtils.RegisterLicense(licenceKeyText);
-            }
-        }
-        
         public Func<HttpContext, Task<bool>> NetCoreHandler { get; set; }
 
         public virtual async Task ProcessRequest(HttpContext context, Func<Task> next)

@@ -28,7 +28,6 @@ namespace ServiceStack
         public bool envIsMono() => Env.IsMono;
         public bool envIsAndroid() => Env.IsAndroid;
         public bool envIsIOS() => Env.IsIOS;
-        public string licensedFeatures() => LicenseUtils.ActivatedLicenseFeatures() == LicenseFeature.All ? "All" : LicenseUtils.ActivatedLicenseFeatures().ToString();
 
         public string envCurrentDirectory() => Environment.CurrentDirectory;
         public bool envIsWindows() => Env.IsWindows;
