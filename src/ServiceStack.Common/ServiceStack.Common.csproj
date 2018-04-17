@@ -1,8 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFrameworks>netstandard2.0</TargetFrameworks>
-    <AssemblyName>ServiceStack.Common</AssemblyName>
-    <PackageId>ServiceStack.Common</PackageId>
+    <AssemblyName>FOSS.ServiceStack.Common.Core</AssemblyName>
+    <PackageId>FOSS.ServiceStack.Common.Core</PackageId>
+    <PackageVersion>5.0.2</PackageVersion>
     <RootNamespace>ServiceStack</RootNamespace>
     <GenerateAssemblyTitleAttribute>false</GenerateAssemblyTitleAttribute>
     <GenerateAssemblyDescriptionAttribute>false</GenerateAssemblyDescriptionAttribute>

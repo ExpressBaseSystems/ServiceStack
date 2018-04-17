@@ -2,8 +2,9 @@
 
   <PropertyGroup>
     <TargetFrameworks>netstandard2.0</TargetFrameworks>
-    <AssemblyName>ServiceStack.Server</AssemblyName>
-    <PackageId>ServiceStack.Server</PackageId>
+    <AssemblyName>FOSS.ServiceStack.Server.Core</AssemblyName>
+    <PackageId>FOSS.ServiceStack.Server.Core</PackageId>
+    <PackageVersion>5.0.2</PackageVersion>
     <GenerateAssemblyTitleAttribute>false</GenerateAssemblyTitleAttribute>
     <GenerateAssemblyDescriptionAttribute>false</GenerateAssemblyDescriptionAttribute>
     <GenerateAssemblyConfigurationAttribute>false</GenerateAssemblyConfigurationAttribute>

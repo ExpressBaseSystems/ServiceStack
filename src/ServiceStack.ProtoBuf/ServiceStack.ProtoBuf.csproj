@@ -2,8 +2,9 @@
 
   <PropertyGroup>
     <TargetFrameworks>netstandard2.0</TargetFrameworks>
-    <AssemblyName>ServiceStack.ProtoBuf</AssemblyName>
-    <PackageId>ServiceStack.ProtoBuf</PackageId>
+    <AssemblyName>FOSS.ServiceStack.ProtoBuf.Core</AssemblyName>
+    <PackageId>FOSS.ServiceStack.ProtoBuf.Core</PackageId>
+    <PackageVersion>5.0.2</PackageVersion>
     <GenerateAssemblyTitleAttribute>false</GenerateAssemblyTitleAttribute>
     <GenerateAssemblyDescriptionAttribute>false</GenerateAssemblyDescriptionAttribute>
     <GenerateAssemblyConfigurationAttribute>false</GenerateAssemblyConfigurationAttribute>
