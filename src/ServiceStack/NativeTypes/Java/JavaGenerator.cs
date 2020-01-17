@@ -20,6 +20,9 @@ namespace ServiceStack.NativeTypes.Java
             Config = config;
         }
 
+        public static Action<StringBuilderWrapper, MetadataType> PreTypeFilter { get; set; }
+        public static Action<StringBuilderWrapper, MetadataType> PostTypeFilter { get; set; }
+
         public static string DefaultGlobalNamespace = "dtos";
 
         public static List<string> DefaultImports = new List<string>
@@ -79,14 +82,26 @@ namespace ServiceStack.NativeTypes.Java
             {"Stream", "InputStream"},
         }.ToConcurrentDictionary();
 
+        public static TypeFilterDelegate TypeFilter { get; set; }
+
         public static Func<List<MetadataType>, List<MetadataType>> FilterTypes = DefaultFilterTypes;
 
         public static List<MetadataType> DefaultFilterTypes(List<MetadataType> types) => types;
 
+        /// <summary>
+        /// Add Code to top of generated code
+        /// </summary>
+        public static AddCodeDelegate InsertCodeFilter { get; set; }
+
+        /// <summary>
+        /// Add Code to bottom of generated code
+        /// </summary>
+        public static AddCodeDelegate AddCodeFilter { get; set; }
+
         public string GetCode(MetadataTypes metadata, IRequest request, INativeTypesMetadata nativeTypes)
         {
             var typeNamespaces = new HashSet<string>();
-            RemoveIgnoredTypes(metadata);
+            var includeList = RemoveIgnoredTypes(metadata);
             metadata.Types.Each(x => typeNamespaces.Add(x.Namespace));
             metadata.Operations.Each(x => typeNamespaces.Add(x.Request.Namespace));
 
@@ -110,29 +125,28 @@ namespace ServiceStack.NativeTypes.Java
 
             var defaultNamespace = Config.GlobalNamespace ?? DefaultGlobalNamespace;
 
-            Func<string, string> defaultValue = k =>
-                request.QueryString[k].IsNullOrEmpty() ? "//" : "";
+            string DefaultValue(string k) => request.QueryString[k].IsNullOrEmpty() ? "//" : "";
 
             var sbInner = StringBuilderCache.Allocate();
             var sb = new StringBuilderWrapper(sbInner);
             sb.AppendLine("/* Options:");
             sb.AppendLine("Date: {0}".Fmt(DateTime.Now.ToString("s").Replace("T", " ")));
-            sb.AppendLine("Version: {0}".Fmt(Env.ServiceStackVersion));
+            sb.AppendLine("Version: {0}".Fmt(Env.VersionString));
             sb.AppendLine("Tip: {0}".Fmt(HelpMessages.NativeTypesDtoOptionsTip.Fmt("//")));
             sb.AppendLine("BaseUrl: {0}".Fmt(Config.BaseUrl));
             sb.AppendLine();
-            sb.AppendLine("{0}Package: {1}".Fmt(defaultValue("Package"), Config.Package));
-            sb.AppendLine("{0}GlobalNamespace: {1}".Fmt(defaultValue("GlobalNamespace"), defaultNamespace));
-            sb.AppendLine("{0}AddPropertyAccessors: {1}".Fmt(defaultValue("AddPropertyAccessors"), Config.AddPropertyAccessors));
-            sb.AppendLine("{0}SettersReturnThis: {1}".Fmt(defaultValue("SettersReturnThis"), Config.SettersReturnThis));
-            sb.AppendLine("{0}AddServiceStackTypes: {1}".Fmt(defaultValue("AddServiceStackTypes"), Config.AddServiceStackTypes));
-            sb.AppendLine("{0}AddResponseStatus: {1}".Fmt(defaultValue("AddResponseStatus"), Config.AddResponseStatus));
-            sb.AppendLine("{0}AddDescriptionAsComments: {1}".Fmt(defaultValue("AddDescriptionAsComments"), Config.AddDescriptionAsComments));
-            sb.AppendLine("{0}AddImplicitVersion: {1}".Fmt(defaultValue("AddImplicitVersion"), Config.AddImplicitVersion));
-            sb.AppendLine("{0}IncludeTypes: {1}".Fmt(defaultValue("IncludeTypes"), Config.IncludeTypes.Safe().ToArray().Join(",")));
-            sb.AppendLine("{0}ExcludeTypes: {1}".Fmt(defaultValue("ExcludeTypes"), Config.ExcludeTypes.Safe().ToArray().Join(",")));
-            sb.AppendLine("{0}TreatTypesAsStrings: {1}".Fmt(defaultValue("TreatTypesAsStrings"), Config.TreatTypesAsStrings.Safe().ToArray().Join(",")));
-            sb.AppendLine("{0}DefaultImports: {1}".Fmt(defaultValue("DefaultImports"), defaultImports.Join(",")));
+            sb.AppendLine("{0}Package: {1}".Fmt(DefaultValue("Package"), Config.Package));
+            sb.AppendLine("{0}GlobalNamespace: {1}".Fmt(DefaultValue("GlobalNamespace"), defaultNamespace));
+            sb.AppendLine("{0}AddPropertyAccessors: {1}".Fmt(DefaultValue("AddPropertyAccessors"), Config.AddPropertyAccessors));
+            sb.AppendLine("{0}SettersReturnThis: {1}".Fmt(DefaultValue("SettersReturnThis"), Config.SettersReturnThis));
+            sb.AppendLine("{0}AddServiceStackTypes: {1}".Fmt(DefaultValue("AddServiceStackTypes"), Config.AddServiceStackTypes));
+            sb.AppendLine("{0}AddResponseStatus: {1}".Fmt(DefaultValue("AddResponseStatus"), Config.AddResponseStatus));
+            sb.AppendLine("{0}AddDescriptionAsComments: {1}".Fmt(DefaultValue("AddDescriptionAsComments"), Config.AddDescriptionAsComments));
+            sb.AppendLine("{0}AddImplicitVersion: {1}".Fmt(DefaultValue("AddImplicitVersion"), Config.AddImplicitVersion));
+            sb.AppendLine("{0}IncludeTypes: {1}".Fmt(DefaultValue("IncludeTypes"), Config.IncludeTypes.Safe().ToArray().Join(",")));
+            sb.AppendLine("{0}ExcludeTypes: {1}".Fmt(DefaultValue("ExcludeTypes"), Config.ExcludeTypes.Safe().ToArray().Join(",")));
+            sb.AppendLine("{0}TreatTypesAsStrings: {1}".Fmt(DefaultValue("TreatTypesAsStrings"), Config.TreatTypesAsStrings.Safe().ToArray().Join(",")));
+            sb.AppendLine("{0}DefaultImports: {1}".Fmt(DefaultValue("DefaultImports"), defaultImports.Join(",")));
 
             sb.AppendLine("*/");
             sb.AppendLine();
@@ -180,6 +194,10 @@ namespace ServiceStack.NativeTypes.Java
             defaultImports.Each(x => sb.AppendLine("import {0};".Fmt(x)));
             sb.AppendLine();
 
+            var insertCode = InsertCodeFilter?.Invoke(allTypes, Config);
+            if (insertCode != null)
+                sb.AppendLine(insertCode);
+
             sb.AppendLine("public class {0}".Fmt(defaultNamespace.SafeToken()));
             sb.AppendLine("{");
 
@@ -192,8 +210,7 @@ namespace ServiceStack.NativeTypes.Java
                     if (!existingTypes.Contains(fullTypeName))
                     {
                         MetadataType response = null;
-                        MetadataOperationType operation;
-                        if (requestTypesMap.TryGetValue(type, out operation))
+                        if (requestTypesMap.TryGetValue(type, out var operation))
                         {
                             response = operation.Response;
                         }
@@ -248,6 +265,10 @@ namespace ServiceStack.NativeTypes.Java
             sb.AppendLine();
             sb.AppendLine("}");
 
+            var addCode = AddCodeFilter?.Invoke(allTypes, Config);
+            if (addCode != null)
+                sb.AppendLine(addCode);
+
             return StringBuilderCache.ReturnAndFree(sbInner);
         }
 
@@ -273,10 +294,11 @@ namespace ServiceStack.NativeTypes.Java
             typeof(ErrorResponse).Name,
         }; 
 
-        private void RemoveIgnoredTypes(MetadataTypes metadata)
+        private List<string> RemoveIgnoredTypes(MetadataTypes metadata)
         {
-            metadata.RemoveIgnoredTypes(Config);
+            var includeList = metadata.RemoveIgnoredTypes(Config);
             metadata.Types.RemoveAll(x => IgnoreTypeNames.Contains(x.Name));
+            return includeList;
         }
 
         private string AppendType(ref StringBuilderWrapper sb, MetadataType type, string lastNS,
@@ -295,6 +317,8 @@ namespace ServiceStack.NativeTypes.Java
 
             var typeName = Type(type.Name, type.GenericArgs);
 
+            PreTypeFilter?.Invoke(sb, type);
+
             if (type.IsEnum.GetValueOrDefault())
             {
                 sb.AppendLine("public static enum {0}".Fmt(typeName));
@@ -307,7 +331,7 @@ namespace ServiceStack.NativeTypes.Java
                     for (var i = 0; i < type.EnumNames.Count; i++)
                     {
                         var name = type.EnumNames[i];
-                        var value = type.EnumValues != null ? type.EnumValues[i] : null;
+                        var value = type.EnumValues?[i];
 
                         var delim = i == type.EnumNames.Count - 1 ? ";" : ",";
                         var serializeAs = JsConfig.TreatEnumAsInteger || (type.Attributes.Safe().Any(x => x.Name == "Flags"))
@@ -365,8 +389,9 @@ namespace ServiceStack.NativeTypes.Java
                                 : "{0}.class".Fmt(returnType);
                         }
                     }
-                    type.Implements.Each(x => interfaces.Add(Type(x)));
                 }
+
+                type.Implements.Each(x => interfaces.Add(Type(x)));
 
                 var extend = extends.Count > 0 
                     ? " extends " + extends[0]
@@ -408,6 +433,8 @@ namespace ServiceStack.NativeTypes.Java
                 sb.AppendLine("}");
             }
 
+            PostTypeFilter?.Invoke(sb, type);
+            
             sb = sb.UnIndent();
 
             return lastNS;
@@ -531,7 +558,7 @@ namespace ServiceStack.NativeTypes.Java
             if (value == null)
                 return "null";
             if (alias == "string" || type == "String")
-                return value.QuotedSafeValue();
+                return value.ToEscapedString();
 
             if (value.StartsWith("typeof("))
             {
@@ -572,10 +599,14 @@ namespace ServiceStack.NativeTypes.Java
 
         public string Type(string type, string[] genericArgs)
         {
+            var useType = TypeFilter?.Invoke(type, genericArgs);
+            if (useType != null)
+                return useType;
+
             if (genericArgs != null)
             {
                 if (type == "Nullable`1")
-                    return /*@Nullable*/ "{0}".Fmt(GenericArg(genericArgs[0]));
+                    return /*@Nullable*/ GenericArg(genericArgs[0]);
                 if (ArrayTypes.Contains(type))
                     return "ArrayList<{0}>".Fmt(GenericArg(genericArgs[0])).StripNullable();
                 if (DictionaryTypes.Contains(type))
@@ -614,8 +645,7 @@ namespace ServiceStack.NativeTypes.Java
             if (arrParts.Length > 1)
                 return "ArrayList<{0}>".Fmt(TypeAlias(arrParts[0]));
 
-            string typeAlias;
-            TypeAliases.TryGetValue(type, out typeAlias);
+            TypeAliases.TryGetValue(type, out var typeAlias);
 
             return typeAlias ?? NameOnly(type);
         }
@@ -740,7 +770,10 @@ namespace ServiceStack.NativeTypes.Java
             if (node.Text == "List")
             {
                 sb.Append("ArrayList<");
-                sb.Append(ConvertFromCSharp(node.Children[0]));
+                if (!node.Children.IsEmpty())
+                    sb.Append(ConvertFromCSharp(node.Children[0]));
+                else
+                    sb.Append(ConvertFromCSharp(new TextNode { Text = "Object" })); //error fallback
                 sb.Append(">");
             }
             else if (node.Text == "Dictionary")
@@ -842,9 +875,9 @@ namespace ServiceStack.NativeTypes.Java
         public static string PropertyStyle(this string name)
         {
             //Gson is case-sensitive, fieldName needs to match json
-            var fieldName = JsConfig.EmitCamelCaseNames
+            var fieldName = JsConfig.TextCase == TextCase.CamelCase
                 ? name.ToCamelCase()
-                : JsConfig.EmitLowercaseUnderscoreNames
+                : JsConfig.TextCase == TextCase.SnakeCase
                     ? name.ToLowercaseUnderscore()
                     : name;
 

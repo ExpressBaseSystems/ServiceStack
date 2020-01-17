@@ -11,7 +11,7 @@ namespace ServiceStack
     /// <summary>
     /// A log entry added by the IRequestLogger
     /// </summary>
-    public class RequestLogEntry
+    public class RequestLogEntry : IMeta
     {
         [AutoIncrement]
         public long Id { get; set; }
@@ -21,6 +21,7 @@ namespace ServiceStack
         public string HttpMethod { get; set; }
         public string AbsoluteUri { get; set; }
         public string PathInfo { get; set; }
+        [StringLength(StringLengthAttribute.MaxText)]
         public string RequestBody { get; set; }
         public object RequestDto { get; set; }
         public string UserAuthId { get; set; }
@@ -37,5 +38,6 @@ namespace ServiceStack
         public string ExceptionSource { get; set; }
         public IDictionary ExceptionData { get; set; }
         public TimeSpan RequestDuration { get; set; }
+        public Dictionary<string, string> Meta { get; set; }
     }
 }

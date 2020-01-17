@@ -142,6 +142,7 @@ namespace ServiceStack.Auth
             {
                 InitSchema = appSettings.Get("apikey.InitSchema", true);
                 RequireSecureConnection = appSettings.Get("apikey.RequireSecureConnection", true);
+                AllowInHttpParams = appSettings.Get("apikey.AllowInHttpParams", false);
 
                 var env = appSettings.GetString("apikey.Environments");
                 if (env != null)
@@ -193,16 +194,16 @@ namespace ServiceStack.Auth
             using (authRepo as IDisposable)
             {
                 var apiKey = GetApiKey(authService.Request, request.Password);
-                ValidateApiKey(apiKey);
+                ValidateApiKey(authService.Request, apiKey);
 
                 var userAuth = authRepo.GetUserAuth(apiKey.UserAuthId);
                 if (userAuth == null)
-                    throw HttpError.Unauthorized("User for ApiKey does not exist");
+                    throw HttpError.Unauthorized(ErrorMessages.UserForApiKeyDoesNotExist.Localize(authService.Request));
 
                 if (IsAccountLocked(authRepo, userAuth))
                     throw new AuthenticationException(ErrorMessages.UserAccountLocked.Localize(authService.Request));
 
-                PopulateSession(authRepo as IUserAuthRepository, userAuth, session);
+                session.PopulateSession(userAuth, authRepo);
 
                 if (session.UserAuthName == null)
                     session.UserAuthName = userAuth.UserName ?? userAuth.Email;
@@ -264,16 +265,16 @@ namespace ServiceStack.Auth
             }
         }
 
-        public virtual void ValidateApiKey(ApiKey apiKey)
+        public virtual void ValidateApiKey(IRequest req, ApiKey apiKey)
         {
             if (apiKey == null)
-                throw HttpError.NotFound("ApiKey does not exist");
+                throw HttpError.NotFound(ErrorMessages.ApiKeyDoesNotExist.Localize(req));
 
             if (apiKey.CancelledDate != null)
-                throw HttpError.Forbidden("ApiKey has been cancelled");
+                throw HttpError.Forbidden(ErrorMessages.ApiKeyHasBeenCancelled.Localize(req));
 
             if (apiKey.ExpiryDate != null && DateTime.UtcNow > apiKey.ExpiryDate.Value)
-                throw HttpError.Forbidden("ApiKey has expired");
+                throw HttpError.Forbidden(ErrorMessages.ApiKeyHasExpired.Localize(req));
         }
 
         public void PreAuthenticateWithApiKey(IRequest req, IResponse res, ApiKey apiKey)
@@ -281,7 +282,7 @@ namespace ServiceStack.Auth
             if (RequireSecureConnection && !req.IsSecureConnection)
                 throw HttpError.Forbidden(ErrorMessages.ApiKeyRequiresSecureConnection.Localize(req));
 
-            ValidateApiKey(apiKey);
+            ValidateApiKey(req, apiKey);
 
             var apiSessionKey = GetSessionKey(apiKey.Id);
             if (SessionCacheDuration != null)
@@ -289,7 +290,7 @@ namespace ServiceStack.Auth
                 var session = req.GetCacheClient().Get<IAuthSession>(apiSessionKey);
 
                 if (session != null)
-                    session = HostContext.AppHost.OnSessionFilter(session, session.Id);
+                    session = HostContext.AppHost.OnSessionFilter(req, session, session.Id);
 
                 if (session != null)
                 {
@@ -486,8 +487,7 @@ namespace ServiceStack
             if (req == null)
                 return null;
 
-            object oApiKey;
-            return req.Items.TryGetValue(Keywords.ApiKey, out oApiKey)
+            return req.Items.TryGetValue(Keywords.ApiKey, out var oApiKey)
                 ? oApiKey as ApiKey
                 : null;
         }

@@ -42,7 +42,7 @@ namespace CheckHttpListener
                 db.InsertAll(SeedRockstars);
             }
             
-            Plugins.Add(new TemplatePagesFeature());
+            Plugins.Add(new SharpPagesFeature());
             
             Plugins.Add(new OpenApiFeature());
 
@@ -61,9 +61,11 @@ namespace CheckHttpListener
 
             SetConfig(new HostConfig
             {
-                HandlerFactoryPath = "api",
-                CompressFilesWithExtensions = { "html", "js" },
-                DebugMode = true
+//                HandlerFactoryPath = "api",
+                CompressFilesWithExtensions = { "js", "css" },
+                // (optional), only compress .js or .css files > 10k
+                CompressFilesLargerThanBytes = 10 * 1024,
+                DebugMode = false
             });
         }
 

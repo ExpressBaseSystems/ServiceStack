@@ -16,13 +16,13 @@ namespace ServiceStack.Metadata
 
         public string OperationName { get; set; }
 
-        public override Task ProcessRequestAsync(IRequest httpReq, IResponse httpRes, string operationName)
+        public override async Task ProcessRequestAsync(IRequest httpReq, IResponse httpRes, string operationName)
         {
             if (HostContext.ApplyCustomHandlerRequestFilters(httpReq, httpRes))
-                return TypeConstants.EmptyTask;
+                return;
 
             if (!AssertAccess(httpReq, httpRes, httpReq.QueryString["op"])) 
-                return TypeConstants.EmptyTask;
+                return;
 
 
             if (httpReq.QueryString["xsd"] != null)
@@ -40,24 +40,18 @@ namespace ServiceStack.Metadata
                 foreach (XmlSchema schema in schemaSet.Schemas())
                 {
                     if (xsdNo != i++) continue;
-                    schema.Write(httpRes.OutputStream);
+                    schema.Write(httpRes.AllowSyncIO().OutputStream);
                     break;
                 }
 #endif
             }
             else
             {
-                using (var sw = new StreamWriter(httpRes.OutputStream))
-                {
-                    var writer = new HtmlTextWriter(sw);
-                    httpRes.ContentType = "text/html; charset=utf-8";
-                    ProcessOperations(writer, httpReq, httpRes);
-                }
+                httpRes.ContentType = "text/html; charset=utf-8";
+                await ProcessOperationsAsync(httpRes.OutputStream, httpReq, httpRes);
             }
 
-            httpRes.EndHttpHandlerRequest(skipHeaders:true);
-
-            return TypeConstants.EmptyTask;
+            await httpRes.EndHttpHandlerRequestAsync(skipHeaders:true);
         }
 
     }

@@ -37,6 +37,8 @@ namespace ServiceStack.Host
 
         public void Add(Type serviceType, Type requestType, Type responseType)
         {
+            if (requestType.IsArray) return; //Custom AutoBatched requests
+            
             this.ServiceTypes.Add(serviceType);
             this.RequestTypes.Add(requestType);
 
@@ -125,13 +127,12 @@ namespace ServiceStack.Host
                 .ToList();
         }
 
-        public Operation GetOperation(Type operationType)
+        public Operation GetOperation(Type requestType)
         {
-            if (operationType == null)
+            if (requestType == null)
                 return null;
-            
-            Operation op;
-            OperationsMap.TryGetValue(operationType, out op);
+
+            OperationsMap.TryGetValue(requestType, out var op);
             return op;
         }
 
@@ -356,7 +357,48 @@ namespace ServiceStack.Host
             return to;
         }
 
-        private void AddReferencedTypes(HashSet<Type> to, Type type)
+        public RestPath FindRoute(string pathInfo, string method = HttpMethods.Get)
+        {
+            var route = RestHandler.FindMatchingRestPath(method, pathInfo, out _);
+            return (RestPath)route;
+        }
+
+        public object CreateRequestFromUrl(string relativeOrAbsoluteUrl, string method = HttpMethods.Get)
+        {
+            var relativeUrl = relativeOrAbsoluteUrl.StartsWith("http:")
+                              || relativeOrAbsoluteUrl.StartsWith("https:")
+                ? relativeOrAbsoluteUrl.RightPart("://").RightPart("/")
+                : relativeOrAbsoluteUrl;
+
+            if (!relativeUrl.StartsWith("/"))
+                relativeUrl = "/" + relativeUrl;
+            
+            var parts = relativeUrl.SplitOnFirst("?");
+            var pathInfo = parts[0];
+
+            var route = FindRoute(pathInfo, method);
+            if (route == null)
+                throw new ArgumentException($"No matching route found for path {method} '{pathInfo}'");
+
+            Dictionary<string, string> query = null;
+            if (parts.Length == 2)
+            {
+                query = new Dictionary<string, string>();
+                var qs = parts[1];
+                var qsParts = qs.Split('&');
+                foreach (var qsPart in qsParts)
+                {
+                    var kvp = qsPart.SplitOnFirst("=");
+                    if (kvp.Length == 1) continue;
+                    query[kvp[0]] = kvp[1].UrlDecode();
+                }
+            }
+
+            var requestDto = route.CreateRequest(pathInfo, query, route.RequestType.CreateInstance());
+            return requestDto;
+        }
+
+        public static void AddReferencedTypes(HashSet<Type> to, Type type)
         {
             if (type == null || to.Contains(type) || !IsDtoType(type))
                 return;
@@ -405,7 +447,7 @@ namespace ServiceStack.Host
             }
         }
 
-        private bool IsDtoType(Type type) => type != null &&
+        private static bool IsDtoType(Type type) => type != null &&
              type.Namespace?.StartsWith("System") == false &&
              type.IsClass && type != typeof(string) &&
              !type.IsGenericType &&

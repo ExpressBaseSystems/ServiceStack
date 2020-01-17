@@ -11,12 +11,12 @@ using ServiceStack.Web;
 
 namespace ServiceStack.Testing
 {
-    public class MockHttpResponse : IHttpResponse
+    public class MockHttpResponse : IHttpResponse, IHasHeaders
     {
         public MockHttpResponse(IRequest request = null)
         {
             this.Request = request;
-            this.Headers = new NameValueCollection();
+            this.Headers = new Dictionary<string, string>();
             this.OutputStream = new MemoryStream();
             this.TextWritten = new StringBuilder();
             this.Cookies = HostContext.AssertAppHost().GetCookies(this);
@@ -31,7 +31,7 @@ namespace ServiceStack.Testing
 
         public StringBuilder TextWritten { get; set; }
 
-        public NameValueCollection Headers { get; set; }
+        public Dictionary<string, string> Headers { get; }
 
         public ICookies Cookies { get; set; }
 
@@ -66,6 +66,12 @@ namespace ServiceStack.Testing
             this.IsClosed = true;
         }
 
+        public Task CloseAsync(CancellationToken token = default(CancellationToken))
+        {
+            Close();
+            return TypeConstants.EmptyTask;
+        }
+
         public void End()
         {
             Close();
@@ -81,8 +87,7 @@ namespace ServiceStack.Testing
         public string ReadAsString()
         {
             if (!IsClosed) this.OutputStream.Seek(0, SeekOrigin.Begin);
-            var bytes = ((MemoryStream)OutputStream).ToArray();
-            return bytes.FromUtf8Bytes();
+            return ((MemoryStream) OutputStream).ReadToEnd();
         }
 
         public byte[] ReadAsBytes()

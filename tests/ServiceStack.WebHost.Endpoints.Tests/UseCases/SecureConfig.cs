@@ -36,9 +36,10 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
         public string Result { get; set; }
     }
 
-    public class HelloAuthenticated : IReturn<HelloAuthenticatedResponse>, IHasSessionId, IHasVersion
+    public class HelloAuthenticated : IReturn<HelloAuthenticatedResponse>, IHasSessionId, IHasBearerToken, IHasVersion
     {
         public string SessionId { get; set; }
+        public string BearerToken { get; set; }
         public int Version { get; set; }
     }
 
@@ -75,6 +76,17 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
         public string Name { get; set; }
     }
 
+    [Restrict(RequestAttributes.Secure)]
+    public class HelloSecureRestricted : IReturn<HelloSecureRestrictedResponse>
+    {
+        public string Name { get; set; }
+    }
+
+    public class HelloSecureRestrictedResponse
+    {
+        public string Result { get; set; }
+    }
+
     public class SecureServices : Service
     {
         public object Get(GetSecure request)
@@ -82,7 +94,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
             if (request.Name == null)
                 throw new ArgumentNullException("Name");
 
-            return new GetSecureResponse { Result = "Hello, {0}!".Fmt(request.Name) };
+            return new GetSecureResponse { Result = $"Hello, {request.Name}!" };
         }
 
         public object Any(HelloSecure request)
@@ -90,7 +102,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
             if (request.Name == null)
                 throw new ArgumentNullException("Name");
 
-            return new HelloSecureResponse { Result = "Hello, {0}!".Fmt(request.Name) };
+            return new HelloSecureResponse { Result = $"Hello, {request.Name}!" };
         }
 
         public object Any(HelloAuthSecure request)
@@ -98,7 +110,15 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
             if (request.Name == null)
                 throw new ArgumentNullException("Name");
 
-            return new HelloAuthSecureResponse { Result = "Hello, {0}!".Fmt(request.Name) };
+            return new HelloAuthSecureResponse { Result = $"Hello, {request.Name}!" };
+        }
+
+        public object Any(HelloSecureRestricted request)
+        {
+            if (request.Name == null)
+                throw new ArgumentNullException("Name");
+
+            return new HelloSecureRestrictedResponse { Result = $"Hello, {request.Name}!" };
         }
 
         [Authenticate]

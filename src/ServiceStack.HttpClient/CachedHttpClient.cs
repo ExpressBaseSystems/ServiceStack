@@ -107,7 +107,7 @@ namespace ServiceStack
             if (response != null)
                 return response;
 
-            if (cache.TryGetValue(requestUri, out var entry))
+            if (webRes.RequestMessage.Method == HttpMethod.Get && cache.TryGetValue(requestUri, out var entry))
             {
                 if (webRes.StatusCode == HttpStatusCode.NotModified)
                 {
@@ -304,6 +304,21 @@ namespace ServiceStack
         }
 
         public Task PutAsync(IReturnVoid requestDto)
+        {
+            return client.PutAsync(requestDto);
+        }
+
+        public Task<TResponse> PatchAsync<TResponse>(IReturn<TResponse> requestDto)
+        {
+            return client.PatchAsync<TResponse>(requestDto);
+        }
+
+        public Task<TResponse> PatchAsync<TResponse>(object requestDto)
+        {
+            return client.PatchAsync<TResponse>(requestDto);
+        }
+
+        public Task PatchAsync(IReturnVoid requestDto)
         {
             return client.PutAsync(requestDto);
         }
@@ -568,6 +583,12 @@ namespace ServiceStack
         {
             get => client.SessionId;
             set => client.SessionId = value;
+        }
+
+        public string BearerToken
+        {
+            get => client.BearerToken;
+            set => client.BearerToken = value;
         }
 
         public int Version

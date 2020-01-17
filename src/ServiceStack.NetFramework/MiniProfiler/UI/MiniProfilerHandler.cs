@@ -124,6 +124,9 @@ namespace ServiceStack.MiniProfiler.UI
 
 	    public override Task ProcessRequestAsync(IRequest httpReq, IResponse httpRes, string operationName)
 		{
+			if (HostContext.ApplyCustomHandlerRequestFilters(httpReq, httpRes))
+				return TypeConstants.EmptyTask;
+
 			var path = httpReq.PathInfo;
 
 			string output;
@@ -250,9 +253,8 @@ namespace ServiceStack.MiniProfiler.UI
 			if (!_ResourceCache.TryGetValue(filename, out result))
 			{
 				using (var stream = typeof(MiniProfilerHandler).Assembly.GetManifestResourceStream("ServiceStack.MiniProfiler.UI." + filename))
-				using (var reader = new StreamReader(stream))
 				{
-					result = reader.ReadToEnd();
+					result = stream.ReadToEnd();
 				}
 
 				_ResourceCache[filename] = result;

@@ -27,15 +27,38 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
                 },
             });
 
+            var apiKeyAuth = new ApiKeyAuthProvider(AppSettings);
+            var jwtAuth = new JwtAuthProvider(AppSettings) {
+                AuthKey = AesUtils.CreateKey()
+            };
             Plugins.Add(new AuthFeature(() => new AuthUserSession(),
                 new IAuthProvider[] {
                     new CredentialsAuthProvider(AppSettings),
+                    apiKeyAuth, 
+                    jwtAuth,
                 }));
 
-            container.Register<IUserAuthRepository>(c => new InMemoryAuthRepository());
-            container.Resolve<IUserAuthRepository>().CreateUserAuth(
+            container.Register<IAuthRepository>(c => new InMemoryAuthRepository());
+            var authRepo = container.Resolve<IAuthRepository>();
+            
+            var userAuth = authRepo.CreateUserAuth(
                 new UserAuth { Email = "test@gmail.com" }, "p@55word");
+
+            var apiKeys = apiKeyAuth.GenerateNewApiKeys(userAuth.Id.ToString(), "live");
+            var apiKeyRepo = (IManageApiKeys) authRepo;
+            apiKeyRepo.StoreAll(apiKeys);
+            LiveApiKey = apiKeys[0];
+
+            JwtBearerToken = jwtAuth.CreateJwtBearerToken(new AuthUserSession {
+                UserAuthId = userAuth.Id.ToString(),
+                Email = userAuth.Email,
+                IsAuthenticated = true,
+            });
         }
+
+        public ApiKey LiveApiKey { get; set; }
+        
+        public string JwtBearerToken { get; set; }
     }
 
     public class JsonServiceClientEncryptedMessagesTests : EncryptedMessagesTests
@@ -57,12 +80,15 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
     public abstract class EncryptedMessagesTests
     {
         private readonly ServiceStackHost appHost;
+        
+        public ApiKey LiveApiKey => ((EncryptedMessagesAppHost)appHost).LiveApiKey;
+        public string JwtBearerToken => ((EncryptedMessagesAppHost)appHost).JwtBearerToken;
 
         protected EncryptedMessagesTests()
         {
             appHost = new EncryptedMessagesAppHost()
                 .Init()
-                .Start(Config.AbsoluteBaseUri);
+                .Start(Config.AbsoluteBaseUri);            
         }
 
         [OneTimeTearDown]
@@ -81,6 +107,17 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
             IEncryptedClient encryptedClient = client.GetEncryptedClient(client.Get(new GetPublicKey()));
 
             var response = encryptedClient.Send(new HelloSecure { Name = "World" });
+
+            Assert.That(response.Result, Is.EqualTo("Hello, World!"));
+        }
+
+        [Test]
+        public void Can_Send_Secure_Restriced_Encrypted_Message_with_ServiceClients()
+        {
+            var client = CreateClient();
+            IEncryptedClient encryptedClient = client.GetEncryptedClient(client.Get(new GetPublicKey()));
+
+            var response = encryptedClient.Send(new HelloSecureRestricted { Name = "World" });
 
             Assert.That(response.Result, Is.EqualTo("Hello, World!"));
         }
@@ -203,6 +240,26 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
         }
 
         [Test]
+        public void Can_Authenticate_with_ApiKey_then_call_AuthOnly_Services_with_ServiceClients()
+        {
+            var client = CreateClient();
+            IEncryptedClient encryptedClient = client.GetEncryptedClient(client.Get<string>("/publickey"));
+            encryptedClient.BearerToken = LiveApiKey.Id;
+
+            var response = encryptedClient.Get(new HelloAuthenticated());
+        }
+
+        [Test]
+        public void Can_Authenticate_with_JWT_then_call_AuthOnly_Services_with_ServiceClients()
+        {
+            var client = CreateClient();
+            IEncryptedClient encryptedClient = client.GetEncryptedClient(client.Get<string>("/publickey"));
+            encryptedClient.BearerToken = JwtBearerToken;
+
+            var response = encryptedClient.Get(new HelloAuthenticated());
+        }
+
+        [Test]
         public void Does_handle_Exceptions()
         {
             var client = CreateClient();
@@ -292,8 +349,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
 
             var request = new HelloSecure { Name = "World" };
 
-            byte[] cryptKey, authKey, iv;
-            AesUtils.CreateCryptAuthKeysAndIv(out cryptKey, out authKey, out iv);
+            AesUtils.CreateCryptAuthKeysAndIv(out var cryptKey, out var authKey, out var iv);
 
             var cryptAuthKeys = cryptKey.Combine(authKey);
 
@@ -334,8 +390,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
 
             var request = new HelloSecure { Name = "World" };
 
-            byte[] cryptKey, authKey, iv;
-            AesUtils.CreateCryptAuthKeysAndIv(out cryptKey, out authKey, out iv);
+            AesUtils.CreateCryptAuthKeysAndIv(out var cryptKey, out var authKey, out var iv);
 
             var cryptAuthKeys = cryptKey.Combine(authKey);
 
@@ -384,8 +439,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
 
             var request = new HelloSecure { Name = "World" };
 
-            byte[] cryptKey, iv;
-            AesUtils.CreateKeyAndIv(out cryptKey, out iv);
+            AesUtils.CreateKeyAndIv(out var cryptKey, out var iv);
 
             byte[] authKey = AesUtils.CreateKey();
 
@@ -470,8 +524,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
         {
             var msg = new HelloSecure { Name = "World" };
 
-            byte[] cryptKey, iv;
-            AesUtils.CreateKeyAndIv(out cryptKey, out iv);
+            AesUtils.CreateKeyAndIv(out var cryptKey, out var iv);
 
             var encryptedText = AesUtils.Encrypt(msg.ToJson(), cryptKey, iv);
 
@@ -487,8 +540,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
         {
             var msg = new HelloSecure { Name = "World" };
 
-            byte[] cryptKey, iv;
-            AesUtils.CreateKeyAndIv(out cryptKey, out iv);
+            AesUtils.CreateKeyAndIv(out var cryptKey, out var iv);
 
             var encryptedBytes = AesUtils.Encrypt(msg.ToJson().ToUtf8Bytes(), cryptKey, iv);
 
@@ -507,8 +559,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
             var msg = timestamp + " POST " + request.GetType().Name + " " + request.ToJson();
             var msgBytes = msg.ToUtf8Bytes();
 
-            byte[] cryptKey, authKey, iv;
-            AesUtils.CreateCryptAuthKeysAndIv(out cryptKey, out authKey, out iv);
+            AesUtils.CreateCryptAuthKeysAndIv(out var cryptKey, out var authKey, out var iv);
 
             var encryptedBytes = AesUtils.Encrypt(msgBytes, cryptKey, iv);
 
@@ -575,8 +626,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
             var request = new HelloSecure { Name = "World" };
             var msgBytes = request.ToJson().ToUtf8Bytes();
 
-            byte[] masterKey, iv;
-            AesUtils.CreateKeyAndIv(out masterKey, out iv);
+            AesUtils.CreateKeyAndIv(out var masterKey, out var iv);
 
             var sha512KeyBytes = masterKey.ToSha512HashBytes();
 

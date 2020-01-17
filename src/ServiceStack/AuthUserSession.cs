@@ -7,7 +7,7 @@ using ServiceStack.Web;
 namespace ServiceStack
 {
     [DataContract]
-    public class AuthUserSession : IAuthSession, IMeta
+    public class AuthUserSession : IAuthSessionExtended, IMeta
     {
         public AuthUserSession()
         {
@@ -18,6 +18,9 @@ namespace ServiceStack
         [DataMember(Order = 01)] public string ReferrerUrl { get; set; }
         [DataMember(Order = 02)] public string Id { get; set; }
         [DataMember(Order = 03)] public string UserAuthId { get; set; }
+        /// <summary>
+        /// User chosen Username when available or Email
+        /// </summary>
         [DataMember(Order = 04)] public string UserAuthName { get; set; }
         [DataMember(Order = 05)] public string UserName { get; set; }
         [DataMember(Order = 06)] public string TwitterUserId { get; set; }
@@ -51,14 +54,32 @@ namespace ServiceStack
         [DataMember(Order = 34)] public DateTime LastModified { get; set; }
         [DataMember(Order = 35)] public List<string> Roles { get; set; }
         [DataMember(Order = 36)] public List<string> Permissions { get; set; }
-        [DataMember(Order = 37)] public virtual bool IsAuthenticated { get; set; }
-        [DataMember(Order = 38)] public virtual bool FromToken { get; set; }
-        [DataMember(Order = 39)] public virtual string ProfileUrl { get; set; }
-        [DataMember(Order = 40)] public virtual string Sequence { get; set; }
+        [DataMember(Order = 37)] public bool IsAuthenticated { get; set; }
+        [DataMember(Order = 38)] public bool FromToken { get; set; }
+        [DataMember(Order = 39)] public string ProfileUrl { get; set; } //Avatar
+        [DataMember(Order = 40)] public string Sequence { get; set; }
         [DataMember(Order = 41)] public long Tag { get; set; }
         [DataMember(Order = 42)] public string AuthProvider { get; set; }
         [DataMember(Order = 43)] public List<IAuthTokens> ProviderOAuthAccess { get; set; }
         [DataMember(Order = 44)] public Dictionary<string, string> Meta { get; set; }
+        
+        //Claims https://docs.microsoft.com/en-us/previous-versions/windows-identity-foundation/ee727097(v=msdn.10)
+        [DataMember(Order = 45)] public List<string> Audiences { get; set; }
+        [DataMember(Order = 46)] public List<string> Scopes { get; set; }
+        [DataMember(Order = 47)] public string Dns { get; set; }
+        [DataMember(Order = 48)] public string Rsa { get; set; }
+        [DataMember(Order = 49)] public string Sid { get; set; }
+        [DataMember(Order = 50)] public string Hash { get; set; }
+        [DataMember(Order = 51)] public string HomePhone { get; set; }
+        [DataMember(Order = 52)] public string MobilePhone { get; set; }
+        [DataMember(Order = 53)] public string Webpage { get; set; }
+
+        //IdentityUser<TKey>
+        [DataMember(Order = 54)] public bool? EmailConfirmed { get; set; }
+        [DataMember(Order = 55)] public bool? PhoneNumberConfirmed { get; set; }
+        [DataMember(Order = 56)] public bool? TwoFactorEnabled { get; set; }
+        [DataMember(Order = 57)] public string SecurityStamp { get; set; }
+        [DataMember(Order = 58)] public string Type { get; set; }
 
         public virtual bool IsAuthorized(string provider)
         {
@@ -98,16 +119,13 @@ namespace ServiceStack
             return this.Roles != null && this.Roles.Contains(role);
         }
 
-        /// <summary>
-        /// Override with Custom Validation logic to Assert if User is allowed to Authenticate. 
-        /// Returning a non-null response invalidates Authentication with IHttpResult response returned to client.
-        /// </summary>
-        public virtual IHttpResult Validate(IServiceBase authService, IAuthSession session, IAuthTokens tokens, Dictionary<string, string> authInfo) => null;
-
         public virtual void OnRegistered(IRequest httpReq, IAuthSession session, IServiceBase service) {}
         public virtual void OnAuthenticated(IServiceBase authService, IAuthSession session, IAuthTokens tokens, Dictionary<string, string> authInfo) { }
         public virtual void OnLogout(IServiceBase authService) {}
         public virtual void OnCreated(IRequest httpReq) {}
+
+        public virtual void OnLoad(IRequest httpReq) {}
+        public virtual IHttpResult Validate(IServiceBase authService, IAuthSession session, IAuthTokens tokens, Dictionary<string, string> authInfo) => null;
     }
 
     public class WebSudoAuthUserSession : AuthUserSession, IWebSudoAuthSession
@@ -163,10 +181,9 @@ namespace ServiceStack
         {
             if (authSession != null)
             {
-                long id;
                 var displayName = authSession.UserName != null 
                     && authSession.UserName.IndexOf('@') == -1      // don't use email
-                    && !long.TryParse(authSession.UserName, out id) // don't use id number
+                    && !long.TryParse(authSession.UserName, out _) // don't use id number
                         ? authSession.UserName
                         : authSession.DisplayName.SafeVarName();
 

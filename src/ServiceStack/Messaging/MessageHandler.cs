@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading.Tasks;
 using ServiceStack.Logging;
 
 namespace ServiceStack.Messaging
@@ -20,6 +21,8 @@ namespace ServiceStack.Messaging
         private readonly Action<IMessageHandler, IMessage<T>, Exception> processInExceptionFn;
         public Func<string, IOneWayClient> ReplyClientFactory { get; set; }
         public string[] PublishResponsesWhitelist { get; set; }
+        public string[] PublishToOutqWhitelist { get; set; }
+        
         private readonly int retryCount;
 
         public int TotalMessagesProcessed { get; private set; }
@@ -43,14 +46,8 @@ namespace ServiceStack.Messaging
             Action<IMessageHandler, IMessage<T>, Exception> processInExceptionFn,
             int retryCount)
         {
-            if (messageService == null)
-                throw new ArgumentNullException(nameof(messageService));
-
-            if (processMessageFn == null)
-                throw new ArgumentNullException(nameof(processMessageFn));
-
-            this.messageService = messageService;
-            this.processMessageFn = processMessageFn;
+            this.messageService = messageService ?? throw new ArgumentNullException(nameof(messageService));
+            this.processMessageFn = processMessageFn ?? throw new ArgumentNullException(nameof(processMessageFn));
             this.processInExceptionFn = processInExceptionFn ?? DefaultInExceptionHandler;
             this.retryCount = retryCount;
             this.ReplyClientFactory = ClientFactory.Create;
@@ -83,6 +80,7 @@ namespace ServiceStack.Messaging
                         return msgsProcessed;
                 }
             }
+            catch (TaskCanceledException) {}
             catch (Exception ex)
             {
                 Log.Error("Error serializing message from mq server: " + ex.Message, ex);
@@ -142,7 +140,7 @@ namespace ServiceStack.Messaging
                 }
                 
                 if (responseEx != null)
-                { 
+                {
                     TotalMessagesFailed++;
 
                     if (message.ReplyTo != null)
@@ -176,6 +174,14 @@ namespace ServiceStack.Messaging
                     }
                     else
                     {
+                        var publishOutqResponses = PublishToOutqWhitelist == null;
+                        if (!publishOutqResponses)
+                        {
+                            var inWhitelist = PublishToOutqWhitelist.Contains(QueueNames<T>.Out);
+                            if (!inWhitelist) 
+                                return;
+                        }
+                        
                         var messageOptions = (MessageOption) message.Options;
                         if (messageOptions.Has(MessageOption.NotifyOneWay))
                         {
@@ -183,7 +189,8 @@ namespace ServiceStack.Messaging
                         }
                     }
                 }
-                
+
+                response = response.GetResponseDto();
                 if (response != null)
                 {
                     var responseMessage = response as IMessage;
@@ -200,12 +207,16 @@ namespace ServiceStack.Messaging
                         if (!publishAllResponses)
                         {
                             var inWhitelist = PublishResponsesWhitelist.Any(
-                                publishResponse => responseType.GetOperationName() == publishResponse);
-                            if (!inWhitelist) return;
+                                publishResponse => 
+                                    responseType.GetOperationName() == publishResponse || 
+                                    responseType.Name == publishResponse);
+                            if (!inWhitelist) 
+                                return;
                         }
 
                         // Leave as-is to work around a Mono 2.6.7 compiler bug
-                        if (!responseType.IsUserType()) return;
+                        if (!responseType.IsUserType()) 
+                            return;
                         mqReplyTo = new QueueNames(responseType).In;
                     }
 
@@ -240,6 +251,9 @@ namespace ServiceStack.Messaging
             {
                 try
                 {
+                    if (ex is AggregateException)
+                        ex = ex.UnwrapIfSingleException();
+                    
                     TotalMessagesFailed++;
                     msgHandled = true;
                     processInExceptionFn(this, message, ex);

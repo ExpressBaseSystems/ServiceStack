@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using ServiceStack.Web;
 
 namespace ServiceStack.ServiceHost.Tests
@@ -76,6 +77,8 @@ namespace ServiceStack.ServiceHost.Tests
             throw new NotImplementedException();
         }
 
+        public Task<string> GetRawBodyAsync() => throw new NotImplementedException(); 
+
         public string RawUrl
         {
             get { throw new NotImplementedException(); }
@@ -128,7 +131,14 @@ namespace ServiceStack.ServiceHost.Tests
 
         public bool IsSecureConnection
         {
-            get { throw new NotImplementedException(); }
+            get => (RequestAttributes & RequestAttributes.Secure) == RequestAttributes.Secure;
+            set
+            {
+                if (value)
+                    RequestAttributes |= RequestAttributes.Secure;
+                else
+                    RequestAttributes &= ~RequestAttributes.Secure;
+            }
         }
 
         public string[] AcceptTypes

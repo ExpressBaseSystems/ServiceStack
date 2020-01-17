@@ -80,49 +80,47 @@ namespace ServiceStack.Host.AspNet
 
         public bool UseBufferedStream
         {
-            get { return BufferedStream != null; }
+            get => BufferedStream != null;
             set
             {
                 if (true)
                     this.response.BufferOutput = false;
 
                 BufferedStream = value
-                    ? BufferedStream ?? new MemoryStream()
+                    ? BufferedStream ?? this.CreateBufferedStream()
                     : null;
             }
-        }
-
-        private void FlushBufferIfAny()
-        {
-            if (BufferedStream == null)
-                return;
-
-            var bytes = BufferedStream.ToArray();
-            try {
-                SetContentLength(bytes.Length); //safe to set Length in Buffered Response
-            } catch {}
-
-            response.OutputStream.Write(bytes, 0, bytes.Length);
-            BufferedStream = MemoryStreamFactory.GetStream();
         }
 
         public object Dto { get; set; }
 
         public void Close()
         {
+            if (IsClosed) return;
             this.IsClosed = true;
 
-            FlushBufferIfAny();
+            this.FlushBufferIfAny(BufferedStream, response.OutputStream);
+            BufferedStream?.Dispose();
+            BufferedStream = null;
 
             response.CloseOutputStream();
         }
 
+        public Task CloseAsync(CancellationToken token = default(CancellationToken))
+        {
+            Close();
+            return TypeConstants.EmptyTask;
+        }
+
         public void End()
         {
+            if (IsClosed) return;
             this.IsClosed = true;
             try
             {
-                FlushBufferIfAny();
+                this.FlushBufferIfAny(BufferedStream, response.OutputStream);
+                BufferedStream?.Dispose();
+                BufferedStream = null;
 
                 response.ClearContent();
                 response.End();
@@ -132,16 +130,15 @@ namespace ServiceStack.Host.AspNet
 
         public void Flush()
         {
-            FlushBufferIfAny();
+            this.FlushBufferIfAny(BufferedStream, response.OutputStream);
 
             response.Flush();
         }
 
-        public Task FlushAsync(CancellationToken token = default(CancellationToken))
+        public async Task FlushAsync(CancellationToken token = default(CancellationToken))
         {
-            Flush(); //FlushAsync() only added in .NET 4.6
-
-            return TypeConstants.EmptyTask;
+            await this.FlushBufferIfAnyAsync(BufferedStream, response.OutputStream, token);
+            await response.OutputStream.FlushAsync(token);
         }
 
         public bool IsClosed
@@ -174,7 +171,7 @@ namespace ServiceStack.Host.AspNet
 
         public void SetCookie(Cookie cookie)
         {
-            if (!HostContext.AppHost.AllowSetCookie(Request, cookie.Name))
+            if (!HostContext.AppHost.SetCookieFilter(Request, cookie))
                 return;
 
             var httpCookie = cookie.ToHttpCookie();

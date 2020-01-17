@@ -66,7 +66,7 @@ namespace ServiceStack
         public NameValueCollection Headers { get; private set; }
 
         public const string DefaultHttpMethod = HttpMethods.Post;
-        public static string DefaultUserAgent = "ServiceStack .NET Client " + Env.ServiceStackVersion;
+        public static string DefaultUserAgent = "ServiceStack .NET Client " + Env.VersionString;
 
         readonly AsyncServiceClient asyncClient;
 
@@ -129,7 +129,17 @@ namespace ServiceStack
         }
         private bool disableAutoCompression;
 
-        public string RequestCompressionType { get; set; }
+
+        private string requestCompressionType;
+        public string RequestCompressionType
+        {
+            get => requestCompressionType;
+            set
+            {
+                requestCompressionType = value;
+                asyncClient.RequestCompressionType = value;
+            }
+        }
 
         /// <summary>
         /// The user name for basic authentication
@@ -201,8 +211,18 @@ namespace ServiceStack
             }
         }
         
-        public string SessionId { get; set; }
+        private string sessionId;
+        public string SessionId
+        {
+            get => sessionId;
+            set
+            {
+                sessionId = value;
+                asyncClient.SessionId = value;
+            }
+        }
 
+        private string userAgent;
         public string UserAgent
         {
             get => userAgent;
@@ -212,7 +232,6 @@ namespace ServiceStack
                 asyncClient.UserAgent = value;
             }
         }
-        private string userAgent;
 
         public TimeSpan? Timeout
         {
@@ -268,9 +287,12 @@ namespace ServiceStack
             set => asyncClient.ShareCookiesWithBrowser = this.shareCookiesWithBrowser = value;
         }
 
-#if !SL5
-        public IWebProxy Proxy { get; set; }
-#endif
+        private IWebProxy proxy;
+        public IWebProxy Proxy
+        {
+            get => this.proxy;
+            set => asyncClient.Proxy = this.proxy = value;
+        }
 
         private ICredentials credentials;
 
@@ -366,6 +388,20 @@ namespace ServiceStack
             }
         }
         private string refreshTokenUri;
+
+        /// <summary>
+        /// Whether new AccessToken from GetAccessToken should return BearerToken in Response DTO or Cookie
+        /// </summary>
+        public bool UseTokenCookie
+        {
+            get => useTokenCookie;
+            set
+            {
+                useTokenCookie = value;
+                asyncClient.UseTokenCookie = value;
+            }
+        }
+        private bool useTokenCookie;
 
         /// <summary>
         /// The request filter is called before any request.
@@ -491,6 +527,7 @@ namespace ServiceStack
         {
             var elType = requests.GetType().GetCollectionType();
             var requestUri = this.SyncReplyBaseUri.WithTrailingSlash() + elType.Name + "[]";
+            this.PopulateRequestMetadatas(requests);
             var client = SendRequest(HttpMethods.Post, ResolveUrl(HttpMethods.Post, requestUri), requests);
 
             try
@@ -600,13 +637,25 @@ namespace ServiceStack
                 {
                     if (RefreshToken != null)
                     {
-                        var refreshRequest = new GetAccessToken { RefreshToken = RefreshToken };
+                        var refreshRequest = new GetAccessToken {
+                            RefreshToken = RefreshToken,
+                            UseTokenCookie = UseTokenCookie,
+                        };                        
                         var uri = this.RefreshTokenUri ?? this.BaseUri.CombineWith(refreshRequest.ToPostUrl());
+
+                        if (this.UseTokenCookie)
+                        {
+                            this.BearerToken = null;
+                        }
 
                         GetAccessTokenResponse tokenResponse;
                         try
                         {
-                            tokenResponse = uri.PostJsonToUrl(refreshRequest).FromJson<GetAccessTokenResponse>();
+                            tokenResponse = uri.PostJsonToUrl(refreshRequest, requestFilter: req => {
+                                if (UseTokenCookie) {
+                                    req.CookieContainer = CookieContainer;
+                                }
+                            }).FromJson<GetAccessTokenResponse>();
                         }
                         catch (WebException refreshEx)
                         {
@@ -621,18 +670,30 @@ namespace ServiceStack
                         }
 
                         var accessToken = tokenResponse?.AccessToken;
-                        if (string.IsNullOrEmpty(accessToken))
-                            throw new RefreshTokenException("Could not retrieve new AccessToken from: " + uri);
-
                         var refreshClient = (HttpWebRequest) createWebRequest();
-                        if (this.GetTokenCookie() != null)
+                        var tokenCookie = this.GetTokenCookie();
+                        
+                        if (UseTokenCookie)
                         {
-                            this.SetTokenCookie(accessToken);
-                            refreshClient.CookieContainer.SetTokenCookie(BaseUri, accessToken);
+                            if (tokenCookie == null)
+                                throw new RefreshTokenException("Could not retrieve new AccessToken Cooke from: " + uri);
+                            
+                            refreshClient.CookieContainer.SetTokenCookie(BaseUri, tokenCookie);
                         }
                         else
                         {
-                            refreshClient.AddBearerToken(this.BearerToken = accessToken);
+                            if (string.IsNullOrEmpty(accessToken))
+                                throw new RefreshTokenException("Could not retrieve new AccessToken from: " + uri);
+
+                            if (tokenCookie != null)
+                            {
+                                this.SetTokenCookie(accessToken);
+                                refreshClient.CookieContainer.SetTokenCookie(BaseUri, accessToken);
+                            }
+                            else
+                            {
+                                refreshClient.AddBearerToken(this.BearerToken = accessToken);
+                            }
                         }
 
                         var refreshResponse = getResponse(refreshClient);
@@ -652,7 +713,7 @@ namespace ServiceStack
                     return true;
                 }
             }
-            catch (WebServiceException /*retrhow*/)
+            catch (WebServiceException /*rethrow*/)
             {
                 throw;
             }
@@ -756,17 +817,16 @@ namespace ServiceStack
                 {
                     if (string.IsNullOrEmpty(errorResponse.ContentType) || errorResponse.ContentType.MatchesContentType(contentType))
                     {
-                        var bytes = errorResponse.GetResponseStream().ReadFully();
-                        var stream = MemoryStreamFactory.GetStream(bytes);
-                        serviceEx.ResponseBody = bytes.FromUtf8Bytes();
-                        serviceEx.ResponseDto = parseDtoFn?.Invoke(stream);
+                        var ms = errorResponse.ResponseStream().CopyToNewMemoryStream();
+                        serviceEx.ResponseBody = ms.ReadToEnd();
+                        serviceEx.ResponseDto = parseDtoFn?.Invoke(ms);
 
-                        if (stream.CanRead)
-                            stream.Dispose(); //alt ms throws when you dispose twice
+                        if (ms.CanRead)
+                            ms.Dispose(); //alt ms throws when you dispose twice
                     }
                     else
                     {
-                        serviceEx.ResponseBody = errorResponse.GetResponseStream().ToUtf8String();
+                        serviceEx.ResponseBody = errorResponse.ResponseStream().ToUtf8String();
                     }
                 }
                 catch (Exception innerEx)
@@ -875,7 +935,9 @@ namespace ServiceStack
                 client.Method = httpMethod;
                 PclExportClient.Instance.AddHeader(client, Headers);
 
-                if (Proxy != null) client.Proxy = Proxy;
+                if (Proxy != null) 
+                    client.Proxy = Proxy;
+                
                 PclExport.Instance.Config(client,
                     allowAutoRedirect: AllowAutoRedirect,
                     timeout: this.Timeout,
@@ -940,7 +1002,7 @@ namespace ServiceStack
             using (var response = webRequest.GetResponse())
             {
                 ApplyWebResponseFilters(response);
-                using (var stream = response.GetResponseStream())
+                using (var stream = response.ResponseStream())
                     return stream.ReadFully();
             }
         }
@@ -954,6 +1016,7 @@ namespace ServiceStack
         {
             var elType = requests.GetType().GetCollectionType();
             var requestUri = this.AsyncOneWayBaseUri.WithTrailingSlash() + elType.Name + "[]";
+            this.PopulateRequestMetadatas(requests);
             SendOneWay(HttpMethods.Post, ResolveUrl(HttpMethods.Post, requestUri), requests);
         }
 
@@ -1074,6 +1137,7 @@ namespace ServiceStack
         {
             var elType = requests.GetType().GetCollectionType();
             var requestUri = this.SyncReplyBaseUri.WithTrailingSlash() + elType.Name + "[]";
+            this.PopulateRequestMetadatas(requests);
             return asyncClient.SendAsync<List<TResponse>>(HttpMethods.Post, ResolveUrl(HttpMethods.Post, requestUri), requests, token);
         }
 
@@ -1087,6 +1151,7 @@ namespace ServiceStack
         {
             var elType = requests.GetType().GetCollectionType();
             var requestUri = this.AsyncOneWayBaseUri.WithTrailingSlash() + elType.Name + "[]";
+            this.PopulateRequestMetadatas(requests);
             return asyncClient.SendAsync<byte[]>(HttpMethods.Post, ResolveUrl(HttpMethods.Post, requestUri), requests, token);
         }
 
@@ -1306,6 +1371,7 @@ namespace ServiceStack
         /// <summary>
         /// APIs returning HttpWebResponse must be explicitly Disposed, e.g using (var res = client.Get(url)) { ... }
         /// </summary>
+        [Obsolete("Use: using (client.Get<HttpWebResponse>(requestDto) { }")]
         public virtual HttpWebResponse Get(object requestDto)
         {
             return Send<HttpWebResponse>(HttpMethods.Get, ResolveTypedUrl(HttpMethods.Get, requestDto), null);
@@ -1314,6 +1380,7 @@ namespace ServiceStack
         /// <summary>
         /// APIs returning HttpWebResponse must be explicitly Disposed, e.g using (var res = client.Get(url)) { ... }
         /// </summary>
+        [Obsolete("Use: using (client.Get<HttpWebResponse>(relativeOrAbsoluteUrl) { }")]
         public virtual HttpWebResponse Get(string relativeOrAbsoluteUrl)
         {
             return Send<HttpWebResponse>(HttpMethods.Get, ResolveUrl(HttpMethods.Get, relativeOrAbsoluteUrl), null);
@@ -1362,11 +1429,20 @@ namespace ServiceStack
             Send<byte[]>(HttpMethods.Delete, ResolveTypedUrl(HttpMethods.Delete, requestDto), null);
         }
 
+        
+        /// <summary>
+        /// APIs returning HttpWebResponse must be explicitly Disposed, e.g using (var res = client.Delete(url)) { ... }
+        /// </summary>
+        [Obsolete("Use: using (client.Delete<HttpWebResponse>(requestDto) { }")]
         public virtual HttpWebResponse Delete(object requestDto)
         {
             return Send<HttpWebResponse>(HttpMethods.Delete, ResolveTypedUrl(HttpMethods.Delete, requestDto), null);
         }
 
+        /// <summary>
+        /// APIs returning HttpWebResponse must be explicitly Disposed, e.g using (var res = client.Delete(url)) { ... }
+        /// </summary>
+        [Obsolete("Use: using (client.Delete<HttpWebResponse>(relativeOrAbsoluteUrl) { }")]
         public virtual HttpWebResponse Delete(string relativeOrAbsoluteUrl)
         {
             return Send<HttpWebResponse>(HttpMethods.Delete, ResolveUrl(HttpMethods.Delete, relativeOrAbsoluteUrl), null);
@@ -1393,6 +1469,10 @@ namespace ServiceStack
             Send<byte[]>(HttpMethods.Post, ResolveTypedUrl(HttpMethods.Post, requestDto), requestDto);
         }
 
+        /// <summary>
+        /// APIs returning HttpWebResponse must be explicitly Disposed, e.g using (var res = client.Post(url)) { ... }
+        /// </summary>
+        [Obsolete("Use: using (client.Post<HttpWebResponse>(requestDto) { }")]
         public virtual HttpWebResponse Post(object requestDto)
         {
             return Send<HttpWebResponse>(HttpMethods.Post, ResolveTypedUrl(HttpMethods.Post, requestDto), requestDto);
@@ -1418,6 +1498,10 @@ namespace ServiceStack
             Send<byte[]>(HttpMethods.Put, ResolveTypedUrl(HttpMethods.Put, requestDto), requestDto);
         }
 
+        /// <summary>
+        /// APIs returning HttpWebResponse must be explicitly Disposed, e.g using (var res = client.Put(url)) { ... }
+        /// </summary>
+        [Obsolete("Use: using (client.Put<HttpWebResponse>(requestDto) { }")]
         public virtual HttpWebResponse Put(object requestDto)
         {
             return Send<HttpWebResponse>(HttpMethods.Put, ResolveTypedUrl(HttpMethods.Put, requestDto), requestDto);
@@ -1444,6 +1528,7 @@ namespace ServiceStack
             Send<byte[]>(HttpMethods.Patch, ResolveTypedUrl(HttpMethods.Patch, requestDto), requestDto);
         }
 
+        [Obsolete("Use: using (client.Patch<HttpWebResponse>(requestDto) { }")]
         public virtual HttpWebResponse Patch(object requestDto)
         {
             return Send<HttpWebResponse>(HttpMethods.Patch, ResolveTypedUrl(HttpMethods.Patch, requestDto), requestDto);
@@ -1470,12 +1555,18 @@ namespace ServiceStack
             Send<byte[]>(httpVerb, ResolveTypedUrl(httpVerb, requestDto), requestDto);
         }
 
+        /// <summary>
+        /// APIs returning HttpWebResponse must be explicitly Disposed, e.g using (var res = client.CustomMethod(method,dto)) { ... }
+        /// </summary>
         public virtual HttpWebResponse CustomMethod(string httpVerb, object requestDto)
         {
             var requestBody = HttpUtils.HasRequestBody(httpVerb) ? requestDto : null;
             return Send<HttpWebResponse>(httpVerb, ResolveTypedUrl(httpVerb, requestDto), requestBody);
         }
 
+        /// <summary>
+        /// APIs returning HttpWebResponse must be explicitly Disposed, e.g using (var res = client.CustomMethod(method,dto)) { ... }
+        /// </summary>
         public virtual HttpWebResponse CustomMethod(string httpVerb, string relativeOrAbsoluteUrl, object requestDto)
         {
             if (!HttpMethods.AllVerbs.Contains(httpVerb.ToUpper()))
@@ -1505,16 +1596,25 @@ namespace ServiceStack
         }
 
 
+        /// <summary>
+        /// APIs returning HttpWebResponse must be explicitly Disposed, e.g using (var res = client.Head(request)) { ... }
+        /// </summary>
         public virtual HttpWebResponse Head(IReturn requestDto)
         {
             return Send<HttpWebResponse>(HttpMethods.Head, ResolveTypedUrl(HttpMethods.Head, requestDto), requestDto);
         }
 
+        /// <summary>
+        /// APIs returning HttpWebResponse must be explicitly Disposed, e.g using (var res = client.Head(request)) { ... }
+        /// </summary>
         public virtual HttpWebResponse Head(object requestDto)
         {
             return Send<HttpWebResponse>(HttpMethods.Head, ResolveTypedUrl(HttpMethods.Head, requestDto), requestDto);
         }
 
+        /// <summary>
+        /// APIs returning HttpWebResponse must be explicitly Disposed, e.g using (var res = client.Head(request)) { ... }
+        /// </summary>
         public virtual HttpWebResponse Head(string relativeOrAbsoluteUrl)
         {
             return Send<HttpWebResponse>(HttpMethods.Head, ResolveUrl(HttpMethods.Head, relativeOrAbsoluteUrl), null);
@@ -1534,7 +1634,8 @@ namespace ServiceStack
         {
             var fileCount = 0;
             long currentStreamPosition = 0;
-            Func<WebRequest> createWebRequest = () =>
+
+            WebRequest createWebRequest()
             {
                 var webRequest = PrepareWebRequest(HttpMethods.Post, requestUri, null, null);
 
@@ -1563,7 +1664,8 @@ namespace ServiceStack
                         outputStream.Write(boundary + newLine);
                         var fileName = file.FileName ?? $"upload{fileCount}";
                         var fieldName = file.FieldName ?? $"upload{fileCount}";
-                        outputStream.Write($"Content-Disposition: form-data;name=\"{fieldName}\";filename=\"{fileName}\"{newLine}Content-Type: application/octet-stream{newLine}{newLine}");
+                        var contentType = file.ContentType ?? (file.FileName != null ? MimeTypes.GetMimeType(file.FileName) : null) ?? "application/octet-stream";
+                        outputStream.Write($"Content-Disposition: form-data;name=\"{fieldName}\";filename=\"{fileName}\"{newLine}Content-Type: {contentType}{newLine}{newLine}");
 
                         int byteCount;
                         int bytesWritten = 0;
@@ -1577,14 +1679,14 @@ namespace ServiceStack
                                 OnUploadProgress(bytesWritten, file.Stream.Length);
                             }
                         }
+
                         outputStream.Write(newLine);
-                        if (fileCount == files.Length - 1)
-                            outputStream.Write(boundary + "--");
+                        if (fileCount == files.Length - 1) outputStream.Write(boundary + "--");
                     }
                 }
 
                 return webRequest;
-            };
+            }
 
             try
             {
@@ -1744,10 +1846,6 @@ namespace ServiceStack
 
         protected TResponse GetResponse<TResponse>(WebResponse webResponse)
         {
-#if NETSTANDARD2_0
-            var compressionType = webResponse.Headers[HttpHeaders.ContentEncoding];
-#endif
-
             //Callee Needs to dispose of response manually
             if (typeof(TResponse) == typeof(HttpWebResponse) && webResponse is HttpWebResponse)
             {
@@ -1755,25 +1853,14 @@ namespace ServiceStack
             }
             if (typeof(TResponse) == typeof(Stream))
             {
-#if NETSTANDARD2_0
-                return (TResponse)(object)webResponse.GetResponseStream().Decompress(compressionType);
-#else
-                return (TResponse)(object)webResponse.GetResponseStream();
-#endif
+                return (TResponse)(object)webResponse.ResponseStream();
             }
 
-#if NETSTANDARD2_0
-            using (var responseStream = webResponse.GetResponseStream().Decompress(compressionType))
-#else
-            using (var responseStream = webResponse.GetResponseStream())
-#endif
+            using (var responseStream = webResponse.ResponseStream())
             {
                 if (typeof(TResponse) == typeof(string))
                 {
-                    using (var reader = new StreamReader(responseStream))
-                    {
-                        return (TResponse)(object)reader.ReadToEnd();
-                    }
+                    return (TResponse)(object)responseStream.ReadToEnd();
                 }
                 if (typeof(TResponse) == typeof(byte[]))
                 {
@@ -1790,6 +1877,15 @@ namespace ServiceStack
 
     public static partial class ServiceClientExtensions
     {
+        public static Stream ResponseStream(this WebResponse webRes)
+        {
+#if NETSTANDARD2_0
+            return webRes.GetResponseStream().Decompress(webRes.Headers[HttpHeaders.ContentEncoding]);
+#else
+            return webRes.GetResponseStream();
+#endif
+        }
+
         public static TResponse PostFile<TResponse>(this IRestClient client,
             string relativeOrAbsoluteUrl, FileInfo fileToUpload, string mimeType)
         {
@@ -1814,12 +1910,25 @@ namespace ServiceStack
             }
         }
 
+        public static void PopulateRequestMetadatas(this IHasSessionId client, IEnumerable<object> requests)
+        {
+            foreach (var request in requests)
+            {
+                client.PopulateRequestMetadata(request);
+            }
+        }
+        
         public static void PopulateRequestMetadata(this IHasSessionId client, object request)
         {
             if (client.SessionId != null)
             {
                 if (request is IHasSessionId hasSession && hasSession.SessionId == null)
                     hasSession.SessionId = client.SessionId;
+            }
+            if (client is IHasBearerToken clientBearer && clientBearer.BearerToken != null)
+            {
+                if (request is IHasBearerToken hasBearer && hasBearer.BearerToken == null)
+                    hasBearer.BearerToken = clientBearer.BearerToken;
             }
             if (client is IHasVersion clientVersion && clientVersion.Version > 0)
             {
@@ -1934,6 +2043,12 @@ namespace ServiceStack
             return sessionId;
         }
 
+        public static string GetOptions(this IServiceClient client)
+        {
+            client.GetCookieValues().TryGetValue("ss-opt", out var sessionId);
+            return sessionId;
+        }
+
         public static void SetSessionId(this IServiceClient client, string sessionId)
         {
             if (sessionId == null)
@@ -1948,6 +2063,14 @@ namespace ServiceStack
                 return;
 
             client.SetCookie("ss-pid", sessionId, expiresIn: TimeSpan.FromDays(365 * 20));
+        }
+
+        public static void SetOptions(this IServiceClient client, string options)
+        {
+            if (options == null)
+                return;
+
+            client.SetCookie("ss-opt", options);
         }
 
         public static string GetTokenCookie(this IServiceClient client)

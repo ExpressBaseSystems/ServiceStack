@@ -17,13 +17,17 @@ using ServiceStack.Text;
 
 namespace ServiceStack.Host.NetCore
 {
-    public class NetCoreResponse : IHttpResponse
+    public class NetCoreResponse : IHttpResponse, IHasHeaders
     {
         private static ILog Log = LogManager.GetLogger(typeof(NetCoreResponse));
 
         private readonly NetCoreRequest request;
         private readonly HttpResponse response;
         private bool hasResponseBody;
+
+        public HttpContext HttpContext => response.HttpContext;
+        public HttpResponse HttpResponse => response;
+
 
         public NetCoreResponse(NetCoreRequest request, HttpResponse response)
         {
@@ -78,16 +82,45 @@ namespace ServiceStack.Host.NetCore
             response.Redirect(url);
         }
 
+        public MemoryStream BufferedStream { get; set; }
+        public Stream OutputStream => BufferedStream ?? response.Body;
+
+        public bool UseBufferedStream
+        {
+            get => BufferedStream != null;
+            set => BufferedStream = value
+                ? BufferedStream ?? this.CreateBufferedStream()
+                : null;
+        }
+
         bool closed = false;
 
         public void Close()
+        {
+            if (closed) return;
+            closed = true;
+            try
+            {
+                this.FlushBufferIfAny(BufferedStream, response.Body);
+                BufferedStream?.Dispose();
+                BufferedStream = null;
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Error closing .NET Core OutputStream", ex);
+            }
+        }
+
+        public async Task CloseAsync(CancellationToken token = default)
         {
             if (!closed)
             {
                 closed = true;
                 try
                 {
-                    FlushBufferIfAny();
+                    await this.FlushBufferIfAnyAsync(BufferedStream, response.Body, token: token);
+                    BufferedStream?.Dispose();
+                    BufferedStream = null;
                 }
                 catch (Exception ex)
                 {
@@ -111,26 +144,14 @@ namespace ServiceStack.Host.NetCore
         {
             if (closed) return;
 
-            FlushBufferIfAny();
-
+            this.FlushBufferIfAny(BufferedStream, response.Body);
+            this.AllowSyncIO();
             response.Body.Flush();
         }
 
-        public async Task FlushAsync(CancellationToken token = new CancellationToken())
+        public async Task FlushAsync(CancellationToken token = default(CancellationToken))
         {
-            if (BufferedStream != null)
-            {
-                var bytes = BufferedStream.ToArray();
-                try
-                {
-                    SetContentLength(bytes.Length); //safe to set Length in Buffered Response
-                }
-                catch { }
-
-                await response.Body.WriteAsync(bytes, token);
-                BufferedStream = MemoryStreamFactory.GetStream();
-            }
-
+            await this.FlushBufferIfAnyAsync(BufferedStream, response.Body, token);
             await response.Body.FlushAsync(token);
         }
 
@@ -138,7 +159,7 @@ namespace ServiceStack.Host.NetCore
         {
             if (!response.HasStarted && contentLength >= 0)
                 response.ContentLength = contentLength;
-            
+
             if (contentLength > 0)
                 hasResponseBody = true;
         }
@@ -153,8 +174,8 @@ namespace ServiceStack.Host.NetCore
             set => response.StatusCode = value;
         }
 
-        public string StatusDescription 
-        { 
+        public string StatusDescription
+        {
             get => response.HttpContext.Features.Get<IHttpResponseFeature>().ReasonPhrase;
             set => response.HttpContext.Features.Get<IHttpResponseFeature>().ReasonPhrase = value;
         }
@@ -167,7 +188,7 @@ namespace ServiceStack.Host.NetCore
 
         public object Dto { get; set; }
 
-        public bool IsClosed => closed; 
+        public bool IsClosed => closed;
 
         public bool KeepAlive { get; set; }
 
@@ -175,36 +196,11 @@ namespace ServiceStack.Host.NetCore
 
         public Dictionary<string, object> Items { get; set; }
 
-        public MemoryStream BufferedStream { get; set; }
-        public Stream OutputStream => BufferedStream ?? response.Body;
-
-        public bool UseBufferedStream
-        {
-            get => BufferedStream != null;
-            set => BufferedStream = value
-                ? BufferedStream ?? new MemoryStream()
-                : null;
-        }
-
-        private void FlushBufferIfAny()
-        {
-            if (BufferedStream == null)
-                return;
-
-            var bytes = BufferedStream.ToArray();
-            try {
-                SetContentLength(bytes.Length); //safe to set Length in Buffered Response
-            } catch {}
-
-            response.Body.Write(bytes, 0, bytes.Length);
-            BufferedStream = MemoryStreamFactory.GetStream();
-        }
-
         public void SetCookie(Cookie cookie)
         {
             try
             {
-                if (!HostContext.AppHost.AllowSetCookie(Request, cookie.Name))
+                if (!HostContext.AppHost.SetCookieFilter(Request, cookie))
                     return;
 
                 var cookieOptions = cookie.ToCookieOptions();
@@ -222,6 +218,19 @@ namespace ServiceStack.Host.NetCore
         }
 
         public ICookies Cookies { get; }
+
+        public Dictionary<string, string> Headers
+        {
+            get
+            {
+                var to = new Dictionary<string, string>();
+                foreach (var entry in response.Headers)
+                {
+                    to[entry.Key] = entry.Value.ToString();
+                }
+                return to;
+            }
+        }
     }
 }
 

@@ -99,11 +99,11 @@ namespace ServiceStack
             var req = httpRes.Request;
             if (req != null && !req.Items.ContainsKey(Keywords.HasLogged))
             {
-                HostContext.TryResolve<IRequestLogger>()?
-                    .Log(req, req.Dto, null, TimeSpan.Zero);
+                HostContext.TryResolve<IRequestLogger>()?.Log(req, req.Dto, httpRes.Dto, TimeSpan.Zero);
             }
 
-            if (!skipClose && !httpRes.IsClosed) httpRes.Close();
+            if (!skipClose && !httpRes.IsClosed) 
+                httpRes.Close();
 
             HostContext.CompleteRequest(req);
         }
@@ -120,11 +120,11 @@ namespace ServiceStack
             var req = httpRes.Request;
             if (req != null && !req.Items.ContainsKey(Keywords.HasLogged))
             {
-                HostContext.TryResolve<IRequestLogger>()?
-                    .Log(req, req.Dto, null, TimeSpan.Zero);
+                HostContext.TryResolve<IRequestLogger>()?.Log(req, req.Dto, httpRes.Dto, TimeSpan.Zero);
             }
 
-            if (!skipClose && !httpRes.IsClosed) httpRes.Close();
+            if (!skipClose && !httpRes.IsClosed) 
+                await httpRes.CloseAsync();
 
             HostContext.CompleteRequest(req);
         }
@@ -144,7 +144,7 @@ namespace ServiceStack
         public static void EndRequestWithNoContent(this IResponse httpRes)
         {
             var headOrOptions = httpRes.Request.Verb == HttpMethods.Head || httpRes.Request.Verb == HttpMethods.Options;
-            if (!headOrOptions)
+            if (!headOrOptions && !httpRes.HasStarted)
             {
                 if (HostContext.Config == null || HostContext.Config.Return204NoContentForEmptyResponse)
                 {

@@ -9,7 +9,10 @@ using Funq;
 using NUnit.Framework;
 using ServiceStack.Data;
 using ServiceStack.DataAnnotations;
+using ServiceStack.Extensions;
+using ServiceStack.Host;
 using ServiceStack.OrmLite;
+using ServiceStack.Testing;
 using ServiceStack.Text;
 using TestsConfig = ServiceStack.WebHost.Endpoints.Tests.Config;
 
@@ -155,8 +158,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                             };
                             foreach (var cmd in ctx.Commands)
                             {
-                                Func<int, int, int> fn;
-                                if (!supportedFns.TryGetValue(cmd.Name.ToString(), out fn)) continue;
+                                if (!supportedFns.TryGetValue(cmd.Name, out var fn)) continue;
                                 var label = !cmd.Suffix.IsNullOrWhiteSpace() ? cmd.Suffix.Trim().ToString() : cmd.ToString();
                                 ctx.Response.Meta[label] = fn(cmd.Args[0].ParseInt32(), cmd.Args[1].ParseInt32()).ToString();
                                 executedCmds.Add(cmd);
@@ -746,6 +748,86 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         }
     }
 
+    [Alias(nameof(Rockstar))]
+    public class CustomSelectRockstar
+    {
+        public int Id { get; set; }
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        [CustomSelect("Age * 2")]
+        public int? Age { get; set; }
+    }
+
+    public class QueryJoinedRockstarAlbumsCustomSelect : QueryDb<CustomSelectRockstar>, 
+        IJoin<CustomSelectRockstar, RockstarAlbum>
+    {
+        public int? Age { get; set; }
+        public string RockstarAlbumName { get; set; }
+    }
+
+    public class CustomSelectRockstarResponse
+    {
+        public int Id { get; set; }
+        public string FirstName { get; set; }
+        public int? Age { get; set; }
+    }
+
+    public class QueryJoinedRockstarAlbumsCustomSelectResponse : QueryDb<CustomSelectRockstar,CustomSelectRockstarResponse>, 
+        IJoin<CustomSelectRockstar, RockstarAlbum>
+    {
+        public int? Age { get; set; }
+        public string RockstarAlbumName { get; set; }
+    }
+
+    public class AutoQueryUnitTests
+    {
+        private ServiceStackHost appHost;
+
+        public AutoQueryUnitTests()
+        {
+            appHost = new BasicAppHost {
+                ConfigureAppHost = host => {
+                    host.Plugins.Add(new AutoQueryFeature());
+                },
+                ConfigureContainer = container => {
+                    var dbFactory = new OrmLiteConnectionFactory(":memory:", SqliteDialect.Provider);
+                    container.Register<IDbConnectionFactory>(dbFactory);
+                    using (var db = dbFactory.Open())
+                    {
+                        db.DropAndCreateTable<Movie>();
+                        db.InsertAll(AutoQueryAppHost.SeedMovies);
+                    }
+                    container.RegisterAutoWired<MyQueryServices>();
+                },
+            }.Init();
+        }
+
+        [OneTimeTearDown] public void OneTimeTearDown() => appHost.Dispose();
+
+        public class MyQueryServices : Service
+        {
+            public IAutoQueryDb AutoQuery { get; set; }
+
+            public object Any(QueryMovies query)
+            {
+                var q = AutoQuery.CreateQuery(query, base.Request);
+                return AutoQuery.Execute(query, q);
+            }
+            
+        }
+        [Test]
+        public void Can_execute_AutoQueryService_in_UnitTest()
+        {
+            var service = appHost.Resolve<MyQueryServices>();
+            service.Request = new BasicRequest();
+
+            var response = (QueryResponse<Movie>) service.Any(
+                new QueryMovies { Ratings = new[] {"G", "PG-13"} });
+            
+            Assert.That(response.Results.Count, Is.EqualTo(5));
+        }
+    }
+
     [TestFixture]
     public class AutoQueryTests
     {
@@ -864,7 +946,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 .FromJson<QueryResponse<Adhoc>>();
             Assert.That(response.Results.Count, Is.EqualTo(7));
 
-            JsConfig.EmitLowercaseUnderscoreNames = true;
+            JsConfig.Init(new Text.Config { TextCase = TextCase.SnakeCase });
             response = Config.ListeningOn.CombineWith("adhoc")
                 .AddQueryParam("last_name", "Hendrix")
                 .GetJsonFromUrl()
@@ -1015,6 +1097,22 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             Assert.That(albumNames, Is.EquivalentTo(new[] { "Nevermind" }));
         }
 
+        [Test]
+        public void Can_execute_query_with_JOIN_on_RockstarAlbums_and_CustomSelectRockstar()
+        {
+            var response = client.Get(new QueryJoinedRockstarAlbumsCustomSelect { Include = "Total" });
+            Assert.That(response.Total, Is.EqualTo(TotalAlbums));
+            Assert.That(response.Results.Count, Is.EqualTo(TotalAlbums));
+            var ages = response.Results.Select(x => x.Age);
+            Assert.That(ages.Contains(27 * 2));
+            
+            var customRes = client.Get(new QueryJoinedRockstarAlbumsCustomSelectResponse { Include = "Total" });
+            Assert.That(customRes.Total, Is.EqualTo(TotalAlbums));
+            Assert.That(customRes.Results.Count, Is.EqualTo(TotalAlbums));
+            ages = customRes.Results.Select(x => x.Age);
+            Assert.That(ages.Contains(27 * 2));
+        }
+        
         [Test]
         public void Can_execute_query_with_multiple_JOINs_on_Rockstar_Albums_and_Genres()
         {

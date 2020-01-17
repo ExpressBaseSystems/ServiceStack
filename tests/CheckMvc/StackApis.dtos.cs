@@ -1,8 +1,8 @@
 /* Options:
-Date: 2017-11-08 03:06:38
-Version: 4.50
+Date: 2019-10-04 22:16:42
+Version: 5.00
 Tip: To override a DTO option, remove "//" prefix before updating
-BaseUrl: http://stackapis.servicestack.net
+BaseUrl: http://stackapis.netcore.io
 
 //GlobalNamespace: 
 //MakePartial: True
@@ -17,6 +17,7 @@ BaseUrl: http://stackapis.servicestack.net
 //AddResponseStatus: False
 //AddImplicitVersion: 
 //InitializeCollections: True
+//ExportValueTypes: False
 //IncludeTypes: 
 //ExcludeTypes: 
 //AddNamespaces: 
@@ -51,6 +52,27 @@ namespace StackApis.ServiceModel
         public virtual Answer Ansnwer { get; set; }
     }
 
+    [Route("/admin/stats", "GET")]
+    public partial class GetStats
+        : IReturn<GetStatsResponse>
+    {
+    }
+
+    public partial class GetStatsResponse
+    {
+        public GetStatsResponse()
+        {
+            TagCounts = new Dictionary<string, long>{};
+        }
+
+        public virtual long QuestionsCount { get; set; }
+        public virtual long AnswersCount { get; set; }
+        public virtual Dictionary<string, long> TagCounts { get; set; }
+        public virtual long TopQuestionScore { get; set; }
+        public virtual long TopQuestionViews { get; set; }
+        public virtual long TopAnswerScore { get; set; }
+    }
+
     [Route("/questions/search")]
     public partial class SearchQuestions
         : IReturn<SearchQuestionsResponse>
@@ -75,9 +97,9 @@ namespace StackApis.ServiceModel
     }
 
     [Route("/questions")]
-    [AutoQueryViewer(Title="Explore StackOverflow Questions", Description="Find ServiceStack Questions on StackOverflow", IconUrl="material-icons:cast", DefaultSearchField="Title", DefaultSearchType="Contains", DefaultSearchText="ServiceStack")]
+    [AutoQueryViewer(DefaultSearchField="Title", DefaultSearchText="ServiceStack", DefaultSearchType="Contains", Description="Find ServiceStack Questions on StackOverflow", IconUrl="material-icons:cast", Title="Explore StackOverflow Questions")]
     public partial class StackOverflowQuery
-        : QueryDb<Question>, IReturn<QueryResponse<Question>>
+        : QueryDb<Question>, IReturn<QueryResponse<Question>>, IMeta
     {
         public virtual int? ScoreGreaterThan { get; set; }
     }

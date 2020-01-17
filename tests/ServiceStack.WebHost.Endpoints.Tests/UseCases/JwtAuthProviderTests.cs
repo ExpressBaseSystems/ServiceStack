@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -15,9 +16,10 @@ using ServiceStack.Web;
 
 namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
 {
-    public class HelloJwt : IReturn<HelloJwtResponse>
+    public class HelloJwt : IReturn<HelloJwtResponse>, IHasBearerToken
     {
         public string Name { get; set; }
+        public string BearerToken { get; set; }
     }
     public class HelloJwtResponse
     {
@@ -100,7 +102,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
                 },
                 issuer: jwtProvider.Issuer,
                 expireIn: jwtProvider.ExpireTokensIn,
-                audience: jwtProvider.Audience,
+                audiences: jwtProvider.Audiences,
                 roles: new[] {"TheRole"},
                 permissions: new[] {"ThePermission"});
 
@@ -158,6 +160,21 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
                 .FromJson<SecuredResponse>();
 
             Assert.That(response.Result, Is.EqualTo(request.Name));
+        }
+
+        [Test]
+        public void Can_authenticate_using_JWT_with_IHasBearerToken()
+        {
+            var authClient = GetClientWithBasicAuthCredentials();
+
+            var authResponse = authClient.Post(new Authenticate());
+            Assert.That(authResponse.BearerToken, Is.Not.Null);
+
+            var client = GetClient();
+            var request = new HelloJwt { BearerToken = authResponse.BearerToken, Name = "IHasBearerToken" };
+            var response = client.Get(request);
+
+            Assert.That(response.Result, Is.EqualTo("Hello, IHasBearerToken"));
         }
     }
 
@@ -241,7 +258,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
             Password = Password,
         };
 
-        protected virtual IJsonServiceClient GetClientWithRefreshToken(string refreshToken = null, string accessToken = null)
+        protected virtual IJsonServiceClient GetClientWithRefreshToken(string refreshToken = null, string accessToken = null, bool useTokenCookie = false)
         {
             if (refreshToken == null)
             {
@@ -251,15 +268,21 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
             var client = GetClient();
             if (client is JsonServiceClient serviceClient)
             {
-                serviceClient.BearerToken = accessToken;
                 serviceClient.RefreshToken = refreshToken;
+                if (useTokenCookie)
+                    serviceClient.UseTokenCookie = true;
+                else
+                    serviceClient.BearerToken = accessToken;
                 return serviceClient;
             }
 
             if (client is JsonHttpClient httpClient)
             {
-                httpClient.BearerToken = accessToken;
                 httpClient.RefreshToken = refreshToken;
+                if (useTokenCookie)
+                    httpClient.UseTokenCookie = true;
+                else
+                    httpClient.BearerToken = accessToken;
                 return httpClient;
             }
 
@@ -428,6 +451,19 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
         }
 
         [Test]
+        public void Can_Auto_reconnect_with_just_RefreshToken_with_UseTokenCookie()
+        {
+            var client = GetClientWithRefreshToken(useTokenCookie:true);
+
+            var request = new Secured { Name = "test" };
+            var response = client.Send(request);
+            Assert.That(response.Result, Is.EqualTo(request.Name));
+
+            response = client.Send(request);
+            Assert.That(response.Result, Is.EqualTo(request.Name));
+        }
+
+        [Test]
         public void Can_Auto_reconnect_with_RefreshToken_after_expired_token()
         {
             var client = GetClientWithRefreshToken(GetRefreshToken(), CreateExpiredToken());
@@ -552,7 +588,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
                 Password = Password,
             }).BearerToken;
 
-            var jwtProvider = (JwtAuthProvider)AuthenticateService.GetAuthProvider(JwtAuthProvider.Name);
+            var jwtProvider = AuthenticateService.GetJwtAuthProvider();
             Assert.That(jwtProvider.IsJwtValid(jwt));
 
             var jwtPayload = jwtProvider.GetValidJwtPayload(jwt);
@@ -565,11 +601,154 @@ namespace ServiceStack.WebHost.Endpoints.Tests.UseCases
         {
             var expiredJwt = CreateExpiredToken();
 
-            var jwtProvider = (JwtAuthProvider)AuthenticateService.GetAuthProvider(JwtAuthProvider.Name);
+            var jwtProvider = AuthenticateService.GetJwtAuthProvider();
             Assert.That(jwtProvider.IsJwtValid(expiredJwt), Is.False);
 
             Assert.That(jwtProvider.GetValidJwtPayload(expiredJwt), Is.Null);
         }
 
+        [Test]
+        public void Does_validate_multiple_audiences()
+        {
+            var jwtProvider = (JwtAuthProvider)AuthenticateService.GetAuthProvider(JwtAuthProviderReader.Name);
+
+            string CreateJwtWithAudiences(params string[] audiences)
+            {
+                var header = JwtAuthProvider.CreateJwtHeader(jwtProvider.HashAlgorithm);
+                var body = JwtAuthProvider.CreateJwtPayload(new AuthUserSession
+                    {
+                        UserAuthId = "1",
+                        DisplayName = "Test",
+                        Email = "as@if.com",
+                        IsAuthenticated = true,
+                    },
+                    issuer: jwtProvider.Issuer,
+                    expireIn: jwtProvider.ExpireTokensIn,
+                    audiences: audiences);
+
+                var jwtToken = JwtAuthProvider.CreateJwt(header, body, jwtProvider.GetHashAlgorithm());
+                return jwtToken;
+            }
+
+            jwtProvider.Audiences = new List<string> { "foo", "bar" };
+            var jwtNoAudience = CreateJwtWithAudiences();
+            Assert.That(jwtProvider.IsJwtValid(jwtNoAudience));
+
+            var jwtWrongAudience = CreateJwtWithAudiences("qux");
+            Assert.That(!jwtProvider.IsJwtValid(jwtWrongAudience));
+            
+            var jwtPartialAudienceMatch = CreateJwtWithAudiences("bar","qux");
+            Assert.That(jwtProvider.IsJwtValid(jwtPartialAudienceMatch));
+
+            jwtProvider.Audience = "foo";
+            Assert.That(!jwtProvider.IsJwtValid(jwtPartialAudienceMatch));
+
+            jwtProvider.Audience = null;
+            Assert.That(jwtProvider.IsJwtValid(jwtPartialAudienceMatch));
+        }
     }
+    
+    public class JwtAuthProviderIntegrationTests
+    {
+        public const string Username = "mythz";
+        public const string Password = "p@55word";
+        private static readonly byte[] AuthKey = AesUtils.CreateKey();
+
+        private readonly ServiceStackHost appHost;
+
+        public JwtAuthProviderIntegrationTests()
+        {
+            appHost = new AppHost()
+                .Init()
+                .Start(Config.ListeningOn);
+        }
+
+        [OneTimeTearDown]
+        public void OneTimeTearDown() => appHost.Dispose();
+
+        class AppHost : AppSelfHostBase
+        {
+            public AppHost()
+                : base(nameof(JwtAuthProviderIntegrationTests), typeof(JwtServices).Assembly) { }
+
+            public override void Configure(Container container)
+            {
+                // just for testing, create a privateKeyXml on every instance
+                Plugins.Add(new AuthFeature(() => new AuthUserSession(),
+                    new IAuthProvider[]
+                    {
+                        new BasicAuthProvider(),
+                        new CredentialsAuthProvider(),
+                        new JwtAuthProvider
+                        {
+                            AuthKey = AuthKey,
+                            RequireSecureConnection = false,
+                            AllowInQueryString = true,
+                            AllowInFormData = true,
+                        },
+                    }));
+
+                Plugins.Add(new RegistrationFeature());
+
+                container.Register<IAuthRepository>(c => new InMemoryAuthRepository());
+
+                var authRepo = GetAuthRepository();
+                authRepo.CreateUserAuth(new UserAuth
+                {
+                    Id = 1,
+                    UserName = Username,
+                    FirstName = "First",
+                    LastName = "Last",
+                    DisplayName = "Display",
+                }, Password);
+                
+                Plugins.Add(new RequestLogsFeature {
+                    EnableSessionTracking = true,
+                    ExcludeRequestDtoTypes = new[] { typeof(Authenticate) },
+                });
+            }
+        }
+
+        protected virtual IJsonServiceClient GetClient() => new JsonServiceClient(Config.ListeningOn) {
+            UserName = Username,
+            Password = Password,
+        };
+
+        protected virtual IJsonServiceClient GetJwtClient() => new JsonServiceClient(Config.ListeningOn) {
+            BearerToken = GetClient().Post(new Authenticate()).BearerToken
+        };
+
+        [Test]
+        public void Does_track_JWT_Sessions_calling_Authenticate_Services()
+        {
+            var client = GetJwtClient();
+
+            var request = new Secured { Name = "test" };
+            var response = client.Send(request);
+            Assert.That(response.Result, Is.EqualTo(request.Name));
+
+            var reqLogger = HostContext.TryResolve<IRequestLogger>();
+            var lastEntrySession = reqLogger.GetLatestLogs(1)[0]?.Session as AuthUserSession;
+            Assert.That(lastEntrySession, Is.Not.Null);
+            Assert.That(lastEntrySession.AuthProvider, Is.EqualTo("jwt"));
+            Assert.That(lastEntrySession.UserName, Is.EqualTo(Username));
+        }
+
+        [Test]
+        public void Does_track_JWT_Sessions_calling_non_Authenticate_Services()
+        {
+            var client = GetJwtClient();
+
+            var request = new Unsecure { Name = "test" };
+            var response = client.Send(request);
+            Assert.That(response.Name, Is.EqualTo(request.Name));
+
+            var reqLogger = HostContext.TryResolve<IRequestLogger>();
+            var lastEntrySession = reqLogger.GetLatestLogs(1)[0]?.Session as AuthUserSession;
+            Assert.That(lastEntrySession, Is.Not.Null);
+            Assert.That(lastEntrySession.AuthProvider, Is.EqualTo("jwt"));
+            Assert.That(lastEntrySession.UserName, Is.EqualTo(Username));
+        }
+    }
+
 }

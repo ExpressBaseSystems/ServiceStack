@@ -89,8 +89,7 @@ namespace ServiceStack
 
             appHost.RequestConverters.Add(async (req, requestDto) =>
             {
-                var encRequest = requestDto as EncryptedMessage;
-                if (encRequest == null)
+                if (!(requestDto is EncryptedMessage encRequest))
                     return null;
 
                 var cryptKey = new byte[AesUtils.KeySizeBytes];
@@ -146,9 +145,8 @@ namespace ServiceStack
                     if (unixTime.FromUnixTime() < minRequestDate)
                         throw HttpError.Forbidden(ErrorRequestTooOld);
 
-                    DateTime expiredEntry;
                     nonceCache.Where(x => now > x.Value).ToList()
-                        .Each(entry => nonceCache.TryRemove(entry.Key, out expiredEntry));
+                        .Each(entry => nonceCache.TryRemove(entry.Key, out _));
 
                     parts = parts[1].SplitOnFirst(' ');
                     req.Items[Keywords.InvokeVerb] = parts[0];
@@ -164,6 +162,7 @@ namespace ServiceStack
                     var request = JsonSerializer.DeserializeFromString(requestJson, requestType);
 
                     req.RequestAttributes |= RequestAttributes.Secure;
+                    req.RequestAttributes &= ~RequestAttributes.InSecure;
                     req.Items[RequestItemsCryptKey] = cryptKey;
                     req.Items[RequestItemsAuthKey] = authKey;
                     req.Items[RequestItemsIv] = iv;
@@ -179,16 +178,14 @@ namespace ServiceStack
 
             appHost.ResponseConverters.Add(async (req, response) =>
             {
-                object oCryptKey, oAuthKey, oIv;
-                if (!req.Items.TryGetValue(RequestItemsCryptKey, out oCryptKey) ||
-                    !req.Items.TryGetValue(RequestItemsAuthKey, out oAuthKey) ||
-                    !req.Items.TryGetValue(RequestItemsIv, out oIv))
+                if (!req.Items.TryGetValue(RequestItemsCryptKey, out var oCryptKey) ||
+                    !req.Items.TryGetValue(RequestItemsAuthKey, out var oAuthKey) ||
+                    !req.Items.TryGetValue(RequestItemsIv, out var oIv))
                     return null;
 
                 req.Response.ClearCookies();
 
-                var ex = response as Exception;
-                if (ex != null)
+                if (response is Exception ex)
                 {
                     await WriteEncryptedError(req, (byte[])oCryptKey, (byte[])oAuthKey, (byte[])oIv, ex);
                     return null;

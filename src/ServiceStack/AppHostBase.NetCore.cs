@@ -1,6 +1,7 @@
 ﻿#if NETSTANDARD2_0
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -15,13 +16,14 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using ServiceStack.Configuration;
 using ServiceStack.IO;
 
 namespace ServiceStack
 {
-    public abstract class AppHostBase : ServiceStackHost
+    public abstract class AppHostBase : ServiceStackHost, IAppHostNetCore, IConfigureServices, IRequireConfiguration
     {
         protected AppHostBase(string serviceName, params Assembly[] assembliesWithServices)
             : base(serviceName, assembliesWithServices) 
@@ -30,6 +32,11 @@ namespace ServiceStack
         }
 
         IApplicationBuilder app;
+
+        public IApplicationBuilder App => app;
+        public IServiceProvider ApplicationServices => app?.ApplicationServices;
+
+        public Func<NetCoreRequest,Task> BeforeNextMiddleware { get; set; }
 
         public virtual void Bind(IApplicationBuilder app)
         {
@@ -43,10 +50,18 @@ namespace ServiceStack
             var logFactory = app.ApplicationServices.GetService<ILoggerFactory>();
             if (logFactory != null)
             {
-                LogManager.LogFactory = new NetCoreLogFactory(logFactory);
+                NetCoreLogFactory.FallbackLoggerFactory = logFactory;
+                if (LogManager.LogFactory == null)
+                    LogManager.LogFactory = new NetCoreLogFactory(logFactory);
             }
 
             appHost.Container.Adapter = new NetCoreContainerAdapter(app.ApplicationServices);
+
+            if (appHost.AppSettings is NetCoreAppSettings config && 
+                appHost is IRequireConfiguration requiresConfig)
+            {
+                requiresConfig.Configuration = config.Configuration;
+            }
         }
 
         /// <summary>
@@ -57,9 +72,13 @@ namespace ServiceStack
             if (app == null)
                 return base.GetWebRootPath();
 
-            var env = app.ApplicationServices.GetService<IHostingEnvironment>();
-            return env.WebRootPath ?? env.ContentRootPath;
+            return HostingEnvironment.WebRootPath ?? HostingEnvironment.ContentRootPath;
         }
+
+        private IHostingEnvironment env;
+
+        public IHostingEnvironment HostingEnvironment => env 
+            ?? (env = app?.ApplicationServices.GetService<IHostingEnvironment>());  
 
         public override void OnConfigLoad()
         {
@@ -67,12 +86,15 @@ namespace ServiceStack
             if (app != null)
             {
                 //Initialize VFS
-                var env = app.ApplicationServices.GetService<IHostingEnvironment>();
-                Config.WebHostPhysicalPath = env.ContentRootPath;
-                Config.DebugMode = env.IsDevelopment();
+                Config.WebHostPhysicalPath = HostingEnvironment.ContentRootPath;
+                Config.DebugMode = HostingEnvironment.IsDevelopment();
+                Config.HandlerFactoryPath = Environment.GetEnvironmentVariable($"ASPNETCORE_APPL_PATH"); //IIS Mapping / sometimes UPPER CASE https://serverfault.com/q/292335
 
-                //Set VirtualFiles to point to ContentRootPath (Project Folder)
-                VirtualFiles = new FileSystemVirtualFiles(env.ContentRootPath);
+                if (VirtualFiles == null)
+                {
+                    //Set VirtualFiles to point to ContentRootPath (Project Folder)
+                    VirtualFiles = new FileSystemVirtualFiles(HostingEnvironment.ContentRootPath);
+                }
                 RegisterLicenseFromAppSettings(AppSettings);
             }
         }
@@ -107,13 +129,18 @@ namespace ServiceStack
             var mode = Config.HandlerFactoryPath;
             if (!string.IsNullOrEmpty(mode))
             {
-                if (pathInfo.IndexOf(mode, StringComparison.Ordinal) != 1)
+                //IIS Reports "ASPNETCORE_APPL_PATH" in UPPER CASE
+                var includedInPathInfo = pathInfo.IndexOf(mode, StringComparison.OrdinalIgnoreCase) == 1;
+                var includedInPathBase = context.Request.PathBase.HasValue &&
+                                         context.Request.PathBase.Value.IndexOf(mode, StringComparison.OrdinalIgnoreCase) == 1;
+                if (!includedInPathInfo && !includedInPathBase)
                 {
                     await next();
                     return;
                 }
 
-                pathInfo = pathInfo.Substring(mode.Length + 1);
+                if (includedInPathInfo)
+                    pathInfo = pathInfo.Substring(mode.Length + 1);
             }
 
             RequestContext.Instance.StartRequestContext();
@@ -129,6 +156,15 @@ namespace ServiceStack
                 
                 httpRes = httpReq.Response;
                 handler = HttpHandlerFactory.GetHandler(httpReq);
+
+                if (BeforeNextMiddleware != null)
+                {
+                    var holdNext = next;
+                    next = async () => {
+                        await BeforeNextMiddleware(httpReq);
+                        await holdNext();
+                    };
+                }
             } 
             catch (Exception ex) //Request Initialization error
             {
@@ -189,9 +225,8 @@ namespace ServiceStack
 
         public override string MapProjectPath(string relativePath)
         {
-            var env = app?.ApplicationServices.GetService<IHostingEnvironment>();
-            if (env?.ContentRootPath != null && relativePath?.StartsWith("~") == true)
-                return Path.GetFullPath(env.ContentRootPath.CombineWith(relativePath.Substring(1)));
+            if (HostingEnvironment?.ContentRootPath != null && relativePath?.StartsWith("~") == true)
+                return Path.GetFullPath(HostingEnvironment.ContentRootPath.CombineWith(relativePath.Substring(1)));
 
             return relativePath.MapHostAbsolutePath();
         }
@@ -229,10 +264,29 @@ namespace ServiceStack
             base.Dispose(disposing);
             LogManager.LogFactory = null;
         }
+
+        /// <summary>
+        /// Requires using ModularStartup
+        /// </summary>
+        /// <param name="services"></param>
+        public virtual void Configure(IServiceCollection services) {}
+
+        public IConfiguration Configuration { get; set; }
+    }
+
+    public interface IAppHostNetCore : IAppHost, IRequireConfiguration
+    {
+        IApplicationBuilder App { get; }
+        IHostingEnvironment HostingEnvironment { get; }
     }
 
     public static class NetCoreAppHostExtensions
     {
+        public static IConfiguration GetConfiguration(this IAppHost appHost) => ((IAppHostNetCore)appHost).Configuration;
+        public static IApplicationBuilder GetApp(this IAppHost appHost) => ((IAppHostNetCore)appHost).App;
+        public static IServiceProvider GetApplicationServices(this IAppHost appHost) => ((IAppHostNetCore)appHost).App.ApplicationServices;
+        public static IHostingEnvironment GetHostingEnvironment(this IAppHost appHost) => ((IAppHostNetCore)appHost).HostingEnvironment;
+        
         public static IApplicationBuilder UseServiceStack(this IApplicationBuilder app, AppHostBase appHost)
         {
             appHost.Bind(app);
@@ -251,6 +305,19 @@ namespace ServiceStack
             req.RequestAttributes = req.GetAttributes() | RequestAttributes.Http;
             return req;
         }
+
+        public static T TryResolve<T>(this IServiceProvider provider) => provider.GetService<T>();
+        public static T Resolve<T>(this IServiceProvider provider) => provider.GetRequiredService<T>();
+
+        public static IHttpRequest ToRequest(this HttpRequest request, string operationName = null) => request.HttpContext.ToRequest();
+
+        public static T TryResolveScoped<T>(this IRequest req) => (T)((IServiceProvider)req).GetService(typeof(T));
+        public static object TryResolveScoped(this IRequest req, Type type) => ((IServiceProvider)req).GetService(type);
+        public static T ResolveScoped<T>(this IRequest req) => (T)((IServiceProvider) req).GetRequiredService(typeof(T));
+        public static object ResolveScoped(this IRequest req, Type type) => ((IServiceProvider)req).GetRequiredService(type);
+        public static IServiceScope CreateScope(this IRequest req) => ((IServiceProvider)req).CreateScope();
+        public static IEnumerable<object> GetServices(this IRequest req, Type type) => ((IServiceProvider)req).GetServices(type);
+        public static IEnumerable<T> GetServices<T>(this IRequest req) => ((IServiceProvider)req).GetServices<T>();
     }
 }
 

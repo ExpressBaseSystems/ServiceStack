@@ -69,7 +69,7 @@ namespace ServiceStack.Auth
 
         public Func<byte[], byte[]> GetHashAlgorithm(IRequest req)
         {
-            Func<byte[], byte[]> hashAlgoritm = null;
+            Func<byte[], byte[]> hashAlgorithm = null;
 
             if (HmacAlgorithms.TryGetValue(HashAlgorithm, out var hmac))
             {
@@ -77,7 +77,7 @@ namespace ServiceStack.Auth
                 if (authKey == null)
                     throw new NotSupportedException("AuthKey required to use: " + HashAlgorithm);
 
-                hashAlgoritm = data => hmac(authKey, data);
+                hashAlgorithm = data => hmac(authKey, data);
             }
 
             if (RsaSignAlgorithms.TryGetValue(HashAlgorithm, out var rsa))
@@ -86,13 +86,13 @@ namespace ServiceStack.Auth
                 if (privateKey == null)
                     throw new NotSupportedException("PrivateKey required to use: " + HashAlgorithm);
 
-                hashAlgoritm = data => rsa(privateKey.Value, data);
+                hashAlgorithm = data => rsa(privateKey.Value, data);
             }
 
-            if (hashAlgoritm == null)
-                throw new NotSupportedException("Invalid algoritm: " + HashAlgorithm);
+            if (hashAlgorithm == null)
+                throw new NotSupportedException("Invalid algorithm: " + HashAlgorithm);
 
-            return hashAlgoritm;
+            return hashAlgorithm;
         }
 
         public string CreateJwtBearerToken(IAuthSession session, IEnumerable<string> roles = null, IEnumerable<string> perms = null) =>
@@ -100,7 +100,7 @@ namespace ServiceStack.Auth
 
         public string CreateJwtBearerToken(IRequest req, IAuthSession session, IEnumerable<string> roles = null, IEnumerable<string> perms = null)
         {
-            var jwtPayload = CreateJwtPayload(session, Issuer, ExpireTokensIn, Audience, roles, perms);
+            var jwtPayload = CreateJwtPayload(session, Issuer, ExpireTokensIn, Audiences, roles, perms);
             CreatePayloadFilter?.Invoke(jwtPayload, session);
 
             if (EncryptPayload)
@@ -115,8 +115,8 @@ namespace ServiceStack.Auth
             var jwtHeader = CreateJwtHeader(HashAlgorithm, GetKeyId(req));
             CreateHeaderFilter?.Invoke(jwtHeader, session);
 
-            var hashAlgoritm = GetHashAlgorithm(req);
-            var bearerToken = CreateJwt(jwtHeader, jwtPayload, hashAlgoritm);
+            var hashAlgorithm = GetHashAlgorithm(req);
+            var bearerToken = CreateJwt(jwtHeader, jwtPayload, hashAlgorithm);
             return bearerToken;
         }
 
@@ -141,11 +141,10 @@ namespace ServiceStack.Auth
                 {"exp", now.Add(expireRefreshTokenIn).ToUnixTime().ToString()},
             };
 
-            if (Audience != null)
-                jwtPayload["aud"] = Audience;
+            jwtPayload.SetAudience(Audiences);
 
-            var hashAlgoritm = GetHashAlgorithm(req);
-            var refreshToken = CreateJwt(jwtHeader, jwtPayload, hashAlgoritm);
+            var hashAlgorithm = GetHashAlgorithm(req);
+            var refreshToken = CreateJwt(jwtHeader, jwtPayload, hashAlgorithm);
             return refreshToken;
         }
 
@@ -203,43 +202,37 @@ namespace ServiceStack.Auth
                 var aadBytes = aad.ToUtf8Bytes();
                 var payloadBytes = jwtPayload.ToJson().ToUtf8Bytes();
 
-                byte[] cipherText, tag;
+                using (var cipherStream = MemoryStreamFactory.GetStream())
                 using (var encrypter = aes.CreateEncryptor(cryptKey, iv))
-                using (var cipherStream = new MemoryStream())
+                using (var cryptoStream = new CryptoStream(cipherStream, encrypter, CryptoStreamMode.Write))
+                using (var writer = new BinaryWriter(cryptoStream))
                 {
-                    using (var cryptoStream = new CryptoStream(cipherStream, encrypter, CryptoStreamMode.Write))
-                    using (var writer = new BinaryWriter(cryptoStream))
+                    writer.Write(payloadBytes);
+                    cryptoStream.FlushFinalBlock();
+                    
+                    using (var hmac = new HMACSHA256(authKey))
+                    using (var encryptedStream = MemoryStreamFactory.GetStream())
+                    using (var bw = new BinaryWriter(encryptedStream))
                     {
-                        writer.Write(payloadBytes);
+                        bw.Write(aadBytes);
+                        bw.Write(iv);
+                        bw.Write(cipherStream.GetBuffer(), 0, (int)cipherStream.Length);
+                        bw.Flush();
+    
+                        var  tag = hmac.ComputeHash(encryptedStream.GetBuffer(), 0, (int) encryptedStream.Length);
+
+                        var cipherTextBase64Url = cipherStream.ToBase64UrlSafe();
+                        var tagBase64Url = tag.ToBase64UrlSafe();
+        
+                        var jweToken = jweHeaderBase64Url + "."
+                            + jweEncKeyBase64Url + "." 
+                            + ivBase64Url + "."
+                            + cipherTextBase64Url + "."
+                            + tagBase64Url;
+        
+                        return jweToken;
                     }
-
-                    cipherText = cipherStream.ToArray();
                 }
-
-                using (var hmac = new HMACSHA256(authKey))
-                using (var encryptedStream = new MemoryStream())
-                {
-                    using (var writer = new BinaryWriter(encryptedStream))
-                    {
-                        writer.Write(aadBytes);
-                        writer.Write(iv);
-                        writer.Write(cipherText);
-                        writer.Flush();
-
-                        tag = hmac.ComputeHash(encryptedStream.ToArray());
-                    }
-                }
-
-                var cipherTextBase64Url = cipherText.ToBase64UrlSafe();
-                var tagBase64Url = tag.ToBase64UrlSafe();
-
-                var jweToken = jweHeaderBase64Url + "."
-                    + jweEncKeyBase64Url + "." 
-                    + ivBase64Url + "."
-                    + cipherTextBase64Url + "."
-                    + tagBase64Url;
-
-                return jweToken;
             }
         }
 
@@ -277,7 +270,7 @@ namespace ServiceStack.Auth
 
         public static JsonObject CreateJwtPayload(
             IAuthSession session, string issuer, TimeSpan expireIn, 
-            string audience=null,
+            IEnumerable<string> audiences=null,
             IEnumerable<string> roles=null,
             IEnumerable<string> permissions =null)
         {
@@ -290,8 +283,7 @@ namespace ServiceStack.Auth
                 {"exp", now.Add(expireIn).ToUnixTime().ToString()},
             };
 
-            if (audience != null)
-                jwtPayload["aud"] = audience;
+            jwtPayload.SetAudience(audiences?.ToList());
 
             if (!string.IsNullOrEmpty(session.Email))
                 jwtPayload["email"] = session.Email;
@@ -308,7 +300,7 @@ namespace ServiceStack.Auth
                 jwtPayload["preferred_username"] = session.UserAuthName;
 
             var profileUrl = session.GetProfileUrl();
-            if (profileUrl != null && profileUrl != AuthMetadataProvider.DefaultNoProfileImgUrl)
+            if (profileUrl != null && profileUrl != Svg.GetDataUri(Svg.Icons.DefaultProfile))
                 jwtPayload["picture"] = profileUrl;
 
             var combinedRoles = new List<string>(session.Roles.Safe());
@@ -342,16 +334,28 @@ namespace ServiceStack.Auth
                 Request.ResponseContentType = MimeTypes.Json;
 
             var token = Request.GetJwtToken();
-            if (string.IsNullOrEmpty(token))
+            IAuthSession session = null;
+            var includeTokensInResponse = jwtAuthProvider.IncludeJwtInConvertSessionToTokenResponse;
+            var createFromSession = string.IsNullOrEmpty(token);
+            if (createFromSession || includeTokensInResponse)
             {
-                var session = Request.GetSession();
-                token = jwtAuthProvider.CreateJwtBearerToken(Request, session);
+                session = Request.GetSession();
+
+                if (createFromSession)
+                    token = jwtAuthProvider.CreateJwtBearerToken(Request, session);
 
                 if (!request.PreserveSession)
                     Request.RemoveSession(session.Id);
             }
 
-            return new HttpResult(new ConvertSessionToTokenResponse())
+            return new HttpResult(new ConvertSessionToTokenResponse {
+                AccessToken = includeTokensInResponse
+                    ? token
+                    : null,
+                RefreshToken = createFromSession && includeTokensInResponse && !request.PreserveSession
+                    ? jwtAuthProvider.CreateJwtRefreshToken(Request, session.UserAuthId, jwtAuthProvider.ExpireRefreshTokensIn)
+                    : null
+            })
             {
                 Cookies = {
                     new Cookie(Keywords.TokenCookie, token, Cookies.RootPath) {
@@ -363,7 +367,7 @@ namespace ServiceStack.Auth
             };
         }
     }
-
+    
     [DefaultRequest(typeof(GetAccessToken))]
     public class GetAccessTokenService : Service
     {
@@ -390,6 +394,9 @@ namespace ServiceStack.Auth
             {
                 throw new ArgumentException(ex.Message);
             }
+
+            if (jwtPayload == null)
+                throw new ArgumentException(ErrorMessages.TokenInvalid.Localize(Request));
 
             jwtAuthProvider.AssertJwtPayloadIsValid(jwtPayload);
 
@@ -421,7 +428,7 @@ namespace ServiceStack.Auth
                     throw new AuthenticationException(ErrorMessages.UserAccountLocked.Localize(Request));
 
                 session = SessionFeature.CreateNewSession(Request, SessionExtensions.CreateRandomSessionId());
-                jwtAuthProvider.PopulateSession(userRepo, userAuth, session);
+                session.PopulateSession(userAuth, userRepo);
 
                 if (userRepo is IManageRoles manageRoles && session.UserAuthId != null)
                 {
@@ -434,10 +441,37 @@ namespace ServiceStack.Auth
 
             var accessToken = jwtAuthProvider.CreateJwtBearerToken(Request, session, roles, perms);
 
-            return new GetAccessTokenResponse
+            var response = new GetAccessTokenResponse
             {
                 AccessToken = accessToken
             };
+
+            if (request.UseTokenCookie != true)
+                return response;
+            
+            return new HttpResult(new GetAccessTokenResponse())
+            {
+                Cookies = {
+                    new Cookie(Keywords.TokenCookie, accessToken, Cookies.RootPath) {
+                        HttpOnly = true,
+                        Secure = Request.IsSecureConnection,
+                        Expires = DateTime.UtcNow.Add(jwtAuthProvider.ExpireTokensIn),
+                    }
+                }
+            };
+        }
+    }
+
+    internal static class JwtAuthProviderUtils
+    {
+        internal static void SetAudience(this JsonObject jwtPayload, List<string> audiences)
+        {
+            if (audiences?.Count > 0)
+            {
+                jwtPayload["aud"] = audiences.Count == 1
+                    ? audiences[0]
+                    : audiences.ToJson();
+            }
         }
     }
 }

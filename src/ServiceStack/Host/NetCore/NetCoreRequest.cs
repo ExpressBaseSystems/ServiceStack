@@ -1,5 +1,7 @@
-﻿#if NETSTANDARD2_0
+﻿
 
+using System.Threading.Tasks;
+#if NETSTANDARD2_0
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -15,11 +17,13 @@ using Microsoft.AspNetCore.Http.Internal;
 using Microsoft.Extensions.DependencyInjection;
 using ServiceStack.Configuration;
 using ServiceStack.IO;
+using ServiceStack.Model;
 using ServiceStack.NetCore;
+using ServiceStack.Text;
 
 namespace ServiceStack.Host.NetCore
 {
-    public class NetCoreRequest : IHttpRequest, IHasResolver, IHasVirtualFiles
+    public class NetCoreRequest : IHttpRequest, IHasResolver, IHasVirtualFiles, IServiceProvider, IHasBufferedStream, IHasStringId
     {
         public static ILog log = LogManager.GetLogger(typeof(NetCoreRequest));
 
@@ -55,16 +59,10 @@ namespace ServiceStack.Host.NetCore
             return this.TryResolveInternal<T>();
         }
 
-        public string GetRawBody()
-        {
-            if (BufferedStream != null)
-            {
-                return BufferedStream.ToArray().FromUtf8Bytes();
-            }
+        public object GetService(Type serviceType) => context.RequestServices.GetService(serviceType);
 
-            request.EnableRewind();
-            return request.Body.ReadFully().FromUtf8Bytes();
-        }
+        public HttpContext HttpContext => context;
+        public HttpRequest HttpRequest => request;
 
         public object OriginalRequest => request;
 
@@ -177,16 +175,6 @@ namespace ServiceStack.Host.NetCore
             }
         }
 
-        public bool UseBufferedStream
-        {
-            get => BufferedStream != null;
-            set => BufferedStream = value
-                ? BufferedStream ?? new MemoryStream(request.Body.ReadFully())
-                : null;
-        }
-
-        public MemoryStream BufferedStream { get; set; }
-
         public string RawUrl => request.Path.Value + request.QueryString;
 
         public string AbsoluteUri => request.GetDisplayUrl();
@@ -195,7 +183,9 @@ namespace ServiceStack.Host.NetCore
 
         public string Authorization => request.Headers[HttpHeaders.Authorization];
 
-        public bool IsSecureConnection => request.IsHttps || XForwardedProtocol == "https";
+        public bool IsSecureConnection => request.IsHttps 
+            || XForwardedProtocol == "https" 
+            || (RequestAttributes & RequestAttributes.Secure) == RequestAttributes.Secure;
 
         public string[] AcceptTypes => request.Headers[HttpHeaders.Accept].ToArray();
 
@@ -203,7 +193,39 @@ namespace ServiceStack.Host.NetCore
 
         public string OriginalPathInfo { get; }
 
+        public MemoryStream BufferedStream { get; set; }
         public Stream InputStream => this.GetInputStream(BufferedStream ?? request.Body);
+
+        public bool UseBufferedStream
+        {
+            get => BufferedStream != null;
+            set => BufferedStream = value
+                ? BufferedStream ?? request.Body.CreateBufferedStream()
+                : null;
+        }
+
+        public string GetRawBody()
+        {
+            if (BufferedStream != null)
+            {
+                request.EnableBuffering();
+                return BufferedStream.ReadBufferedStreamToEnd(this);
+            }
+
+            Response.AllowSyncIO();
+            return request.Body.ReadToEnd();
+        }
+
+        public Task<string> GetRawBodyAsync()
+        {
+            if (BufferedStream != null)
+            {
+                request.EnableBuffering();
+                return Task.FromResult(BufferedStream.ReadBufferedStreamToEnd(this));
+            }
+
+            return request.Body.ReadToEndAsync();
+        }
 
         public long ContentLength => request.ContentLength.GetValueOrDefault();
 
@@ -319,6 +341,8 @@ namespace ServiceStack.Host.NetCore
                 return isFile.Value;
             }
         }
+
+        public string Id => System.Diagnostics.Activity.Current?.Id ?? HttpContext.TraceIdentifier;
     }
 }
 

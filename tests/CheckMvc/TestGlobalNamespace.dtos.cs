@@ -1,6 +1,6 @@
 /* Options:
-Date: 2017-11-08 03:43:53
-Version: 5.00
+Date: 2019-10-04 15:16:43
+Version: 5.7
 Tip: To override a DTO option, remove "//" prefix before updating
 BaseUrl: http://test.servicestack.net
 
@@ -110,7 +110,7 @@ namespace testdtos
 
     [Route("/jwt")]
     public partial class CreateJwt
-        : AuthUserSession, IReturn<CreateJwtResponse>
+        : AuthUserSession, IReturn<CreateJwtResponse>, IMeta
     {
         public virtual DateTime? JwtExpiry { get; set; }
     }
@@ -135,8 +135,16 @@ namespace testdtos
         public virtual ResponseStatus ResponseStatus { get; set; }
     }
 
+    [Route("/custom")]
+    [Route("/custom/{Data}")]
+    public partial class CustomRoute
+        : IReturn<CustomRoute>
+    {
+        public virtual string Data { get; set; }
+    }
+
     public partial class CustomUserSession
-        : AuthUserSession
+        : AuthUserSession, IMeta
     {
         [DataMember]
         public virtual string CustomName { get; set; }
@@ -145,16 +153,14 @@ namespace testdtos
         public virtual string CustomInfo { get; set; }
     }
 
-    [Route("/image-draw/{Name}")]
-    public partial class DrawImage
+    public partial class DummyTypes
     {
-        public virtual string Name { get; set; }
-        public virtual string Format { get; set; }
-        public virtual int? Width { get; set; }
-        public virtual int? Height { get; set; }
-        public virtual int? FontSize { get; set; }
-        public virtual string Foreground { get; set; }
-        public virtual string Background { get; set; }
+        public DummyTypes()
+        {
+            HelloResponses = new List<HelloResponse>{};
+        }
+
+        public virtual List<HelloResponse> HelloResponses { get; set; }
     }
 
     [Route("/echo/collections")]
@@ -175,10 +181,23 @@ namespace testdtos
         public virtual Dictionary<int, string> IntStringMap { get; set; }
     }
 
+    [Route("/echo/complex")]
     public partial class EchoComplexTypes
         : IReturn<EchoComplexTypes>
     {
+        public EchoComplexTypes()
+        {
+            SubTypes = new List<SubType>{};
+            SubTypeMap = new Dictionary<string, SubType>{};
+            StringMap = new Dictionary<string, string>{};
+            IntStringMap = new Dictionary<int, string>{};
+        }
+
         public virtual SubType SubType { get; set; }
+        public virtual List<SubType> SubTypes { get; set; }
+        public virtual Dictionary<string, SubType> SubTypeMap { get; set; }
+        public virtual Dictionary<string, string> StringMap { get; set; }
+        public virtual Dictionary<int, string> IntStringMap { get; set; }
     }
 
     [Route("/echo/types")]
@@ -241,20 +260,88 @@ namespace testdtos
         public virtual ResponseStatus ResponseStatus { get; set; }
     }
 
+    [Route("/Stuff")]
+    [DataContract(Namespace="http://schemas.servicestack.net/types")]
+    public partial class GetStuff
+        : IReturn<GetStuffResponse>
+    {
+        [DataMember]
+        [ApiMember(DataType="DateTime", Name="Summary Date")]
+        public virtual DateTime? SummaryDate { get; set; }
+
+        [DataMember]
+        [ApiMember(DataType="DateTime", Name="Summary End Date")]
+        public virtual DateTime? SummaryEndDate { get; set; }
+
+        [DataMember]
+        [ApiMember(DataType="string", Name="Symbol")]
+        public virtual string Symbol { get; set; }
+
+        [DataMember]
+        [ApiMember(DataType="string", Name="Email")]
+        public virtual string Email { get; set; }
+
+        [DataMember]
+        [ApiMember(DataType="bool", Name="Is Enabled")]
+        public virtual bool? IsEnabled { get; set; }
+    }
+
+    [DataContract(Namespace="http://schemas.servicestack.net/types")]
+    public partial class GetStuffResponse
+    {
+        [DataMember]
+        public virtual DateTime? SummaryDate { get; set; }
+
+        [DataMember]
+        public virtual DateTime? SummaryEndDate { get; set; }
+
+        [DataMember]
+        public virtual string Symbol { get; set; }
+
+        [DataMember]
+        public virtual string Email { get; set; }
+
+        [DataMember]
+        public virtual bool? IsEnabled { get; set; }
+    }
+
+    public partial class HelloAuth
+        : IReturn<HelloResponse>
+    {
+        public virtual string Name { get; set; }
+    }
+
+    [Route("/hello-image/{Name}")]
+    public partial class HelloImage
+        : IReturn<byte[]>
+    {
+        public virtual string Name { get; set; }
+        public virtual string Format { get; set; }
+        public virtual int? Width { get; set; }
+        public virtual int? Height { get; set; }
+        public virtual int? FontSize { get; set; }
+        public virtual string FontFamily { get; set; }
+        public virtual string Foreground { get; set; }
+        public virtual string Background { get; set; }
+    }
+
     [Route("/image-bytes")]
     public partial class ImageAsBytes
+        : IReturn<byte[]>
     {
         public virtual string Format { get; set; }
     }
 
     [Route("/image-custom")]
     public partial class ImageAsCustomResult
+        : IReturn<byte[]>
     {
         public virtual string Format { get; set; }
     }
 
     [Route("/image-file")]
     public partial class ImageAsFile
+        : IReturn<byte[]>
     {
         public virtual string Format { get; set; }
     }
@@ -267,12 +354,14 @@ namespace testdtos
 
     [Route("/image-stream")]
     public partial class ImageAsStream
+        : IReturn<Stream>
     {
         public virtual string Format { get; set; }
     }
 
     [Route("/image-response")]
     public partial class ImageWriteToResponse
+        : IReturn<byte[]>
     {
         public virtual string Format { get; set; }
     }
@@ -307,6 +396,12 @@ namespace testdtos
     {
         public virtual string Account { get; set; }
         public virtual string Name { get; set; }
+    }
+
+    public partial class RequiresAdmin
+        : IReturn<RequiresAdmin>
+    {
+        public virtual int Id { get; set; }
     }
 
     public partial class ReturnedDto
@@ -362,6 +457,12 @@ namespace testdtos
         public virtual int Id { get; set; }
     }
 
+    public partial class SendReturnVoid
+        : IReturnVoid
+    {
+        public virtual int Id { get; set; }
+    }
+
     public partial class SendVerbResponse
     {
         public virtual int Id { get; set; }
@@ -382,6 +483,18 @@ namespace testdtos
         public virtual string UserName { get; set; }
         public virtual string DisplayName { get; set; }
         public virtual ResponseStatus ResponseStatus { get; set; }
+    }
+
+    [Route("/testdata/AllCollectionTypes")]
+    public partial class TestDataAllCollectionTypes
+        : IReturn<AllCollectionTypes>
+    {
+    }
+
+    [Route("/testdata/AllTypes")]
+    public partial class TestDataAllTypes
+        : IReturn<AllTypes>
+    {
     }
 
     [Route("/null-response")]
@@ -410,6 +523,13 @@ namespace testdtos
         : IReturn<GetSessionResponse>
     {
         public virtual string CustomName { get; set; }
+    }
+
+    [Route("/logs")]
+    public partial class ViewLogs
+        : IReturn<string>
+    {
+        public virtual bool Clear { get; set; }
     }
 
     [Route("/wait/{ForMs}")]
@@ -564,6 +684,27 @@ namespace testdtos
         public virtual AllCollectionTypes AllCollectionTypes { get; set; }
     }
 
+    ///<summary>
+    ///Description on HelloAll type
+    ///</summary>
+    [DataContract]
+    public partial class HelloAnnotated
+        : IReturn<HelloAnnotatedResponse>
+    {
+        [DataMember]
+        public virtual string Name { get; set; }
+    }
+
+    ///<summary>
+    ///Description on HelloAllResponse type
+    ///</summary>
+    [DataContract]
+    public partial class HelloAnnotatedResponse
+    {
+        [DataMember]
+        public virtual string Result { get; set; }
+    }
+
     public partial class HelloArray
         : IReturn<ArrayResult[]>
     {
@@ -602,11 +743,6 @@ namespace testdtos
         : IReturn<HelloVerbResponse>, IDelete
     {
         public virtual int Id { get; set; }
-    }
-
-    public partial class HelloExternal
-    {
-        public virtual string Name { get; set; }
     }
 
     public partial class HelloGet
@@ -953,20 +1089,20 @@ namespace testdtos
     }
 
     public partial class QueryPocoBase
-        : QueryDb<OnlyDefinedInGenericType>, IReturn<QueryResponse<OnlyDefinedInGenericType>>
+        : QueryDb<OnlyDefinedInGenericType>, IReturn<QueryResponse<OnlyDefinedInGenericType>>, IMeta
     {
         public virtual int Id { get; set; }
     }
 
     public partial class QueryPocoIntoBase
-        : QueryDb<OnlyDefinedInGenericTypeFrom, OnlyDefinedInGenericTypeInto>, IReturn<QueryResponse<OnlyDefinedInGenericTypeInto>>
+        : QueryDb<OnlyDefinedInGenericTypeFrom, OnlyDefinedInGenericTypeInto>, IReturn<QueryResponse<OnlyDefinedInGenericTypeInto>>, IMeta
     {
         public virtual int Id { get; set; }
     }
 
-    [Route("/rockstars")]
+    [Route("/rockstars", "GET")]
     public partial class QueryRockstars
-        : QueryDb<Rockstar>, IReturn<QueryResponse<Rockstar>>
+        : QueryDb<Rockstar>, IReturn<QueryResponse<Rockstar>>, IMeta
     {
     }
 
@@ -980,6 +1116,13 @@ namespace testdtos
     {
         public virtual string Result { get; set; }
         public virtual ResponseStatus ResponseStatus { get; set; }
+    }
+
+    public partial class RestrictedAttributes
+    {
+        public virtual int Id { get; set; }
+        public virtual string Name { get; set; }
+        public virtual Hello Hello { get; set; }
     }
 
     [Route("/return/bytes")]
@@ -1074,6 +1217,12 @@ namespace testdtos
 
         public virtual List<Logger> ExistingLogs { get; set; }
         public virtual ResponseStatus ResponseStatus { get; set; }
+    }
+
+    [Route("/rockstars", "POST")]
+    public partial class StoreRockstars
+        : List<Rockstar>, IReturn<StoreRockstars>
+    {
     }
 
     [Route("/throw404")]

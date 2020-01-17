@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.IO.Compression;
+using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 using ServiceStack.Caching;
 using ServiceStack.Configuration;
@@ -47,7 +49,7 @@ namespace ServiceStack
 
         public static string GetHeader(this IRequest request, string headerName)
         {
-            return request.Headers.Get(headerName);
+            return request?.Headers.Get(headerName);
         }
 
         public static string GetParamInRequestHeader(this IRequest request, string name)
@@ -189,6 +191,7 @@ namespace ServiceStack
         /// <summary>
         /// Store an entry in the IHttpRequest.Items Dictionary
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void SetItem(this IRequest httpReq, string key, object value)
         {
             if (httpReq == null) return;
@@ -199,6 +202,7 @@ namespace ServiceStack
         /// <summary>
         /// Get an entry from the IHttpRequest.Items Dictionary
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object GetItem(this IRequest httpReq, string key)
         {
             if (httpReq == null) return null;
@@ -228,7 +232,8 @@ namespace ServiceStack
 
         public static void ReleaseIfInProcessRequest(this IRequest httpReq)
         {
-            if (httpReq == null) return;
+            if (httpReq == null) 
+                return;
 
             httpReq.RequestAttributes = httpReq.RequestAttributes & ~RequestAttributes.InProcess;
         }
@@ -255,6 +260,71 @@ namespace ServiceStack
             return req != null 
                 ? HostContext.AppHost.GetRuntimeConfig(req, name, defaultValue)
                 : defaultValue;
+        }
+
+        public static void RegisterForDispose(this IRequest request, IDisposable disposable)
+        {
+            if (disposable == null)
+                return;
+#if NETSTANDARD2_0
+            var netcoreReq = (Microsoft.AspNetCore.Http.HttpRequest) request.OriginalRequest;
+            netcoreReq.HttpContext.Response.RegisterForDispose(disposable);
+#else
+            // IDisposable's in IRequest.Items are disposed in AppHost.OnEndRequest()
+            var typeName = disposable.GetType().Name;
+            var i = 0;
+            var key = typeName;
+            while (request.Items.ContainsKey(key))
+            {
+                key = typeName + (++i);
+            }
+            request.Items[key] = disposable;
+#endif
+        }
+    }
+
+    // Share same buffered impl/behavior across all Hosts
+    internal static class BufferedExtensions
+    {
+        internal static MemoryStream CreateBufferedStream(this IResponse response)
+        {
+            return MemoryStreamFactory.GetStream();
+        }
+
+        internal static MemoryStream CreateBufferedStream(this Stream stream)
+        {
+            return stream.CopyToNewMemoryStream();
+        }
+
+        internal static string ReadBufferedStreamToEnd(this MemoryStream stream, IRequest req)
+        {
+            return req.GetInputStream(stream).ReadToEnd();
+        }
+
+        internal static void FlushBufferIfAny(this IResponse response, MemoryStream buffer, Stream output)
+        {
+            if (buffer == null)
+                return;
+
+            try {
+                response.SetContentLength(buffer.Length); //safe to set Length in Buffered Response
+            } catch {}
+
+            buffer.WriteTo(output);
+            buffer.SetLength(buffer.Position = 0); //reset
+        }
+
+        internal static async Task FlushBufferIfAnyAsync(this IResponse response, MemoryStream buffer, Stream output, CancellationToken token=default(CancellationToken))
+        {
+            if (buffer == null)
+                return;
+
+            try {
+                response.SetContentLength(buffer.Length); //safe to set Length in Buffered Response
+            } catch {}
+
+            await buffer.WriteToAsync(output, token: token);
+            buffer.SetLength(buffer.Position = 0); //reset
         }
     }
 }

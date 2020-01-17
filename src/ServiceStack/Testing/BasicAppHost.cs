@@ -1,8 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.Reflection;
 using Funq;
 using ServiceStack.Host;
+using ServiceStack.Web;
 
 namespace ServiceStack.Testing
 {
@@ -15,7 +15,7 @@ namespace ServiceStack.Testing
 #if !NETSTANDARD2_0
                        Assembly.GetExecutingAssembly()
 #else
-                       typeof(BasicAppHost).GetTypeInfo().Assembly
+                       typeof(BasicAppHost).Assembly
 #endif
                    })
         {
@@ -39,6 +39,9 @@ namespace ServiceStack.Testing
         {
             set => ServiceController = value(this);
         }
+
+        public override IServiceGateway GetServiceGateway(IRequest req) => 
+            base.GetServiceGateway(req ?? new BasicRequest());
 
         public override void OnConfigLoad()
         {

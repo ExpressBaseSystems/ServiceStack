@@ -20,6 +20,9 @@ namespace ServiceStack.NativeTypes.CSharp
             Config = config;
             feature = HostContext.GetPlugin<NativeTypesFeature>();
         }
+        
+        public static Action<StringBuilderWrapper, MetadataType> PreTypeFilter { get; set; }
+        public static Action<StringBuilderWrapper, MetadataType> PostTypeFilter { get; set; }
 
         public static Dictionary<string, string> TypeAliases = new Dictionary<string, string> 
         {
@@ -37,9 +40,21 @@ namespace ServiceStack.NativeTypes.CSharp
             { "Decimal", "decimal" },    
         };
 
+        public static TypeFilterDelegate TypeFilter { get; set; }
+
         public static Func<List<MetadataType>, List<MetadataType>> FilterTypes = DefaultFilterTypes;
 
         public static List<MetadataType> DefaultFilterTypes(List<MetadataType> types) => types;
+
+        /// <summary>
+        /// Add Code to top of generated code
+        /// </summary>
+        public static AddCodeDelegate InsertCodeFilter { get; set; }
+
+        /// <summary>
+        /// Add Code to bottom of generated code
+        /// </summary>
+        public static AddCodeDelegate AddCodeFilter { get; set; }
 
         public string GetCode(MetadataTypes metadata, IRequest request)
         {
@@ -64,14 +79,13 @@ namespace ServiceStack.NativeTypes.CSharp
                 }
             }
 
-            Func<string,string> defaultValue = k =>
-                request.QueryString[k].IsNullOrEmpty() ? "//" : "";
+            string defaultValue(string k) => request.QueryString[k].IsNullOrEmpty() ? "//" : "";
 
             var sbInner = StringBuilderCache.Allocate();
             var sb = new StringBuilderWrapper(sbInner);
             sb.AppendLine("/* Options:");
             sb.AppendLine("Date: {0}".Fmt(DateTime.Now.ToString("s").Replace("T"," ")));
-            sb.AppendLine("Version: {0}".Fmt(Env.ServiceStackVersion));
+            sb.AppendLine("Version: {0}".Fmt(Env.VersionString));
             sb.AppendLine("Tip: {0}".Fmt(HelpMessages.NativeTypesDtoOptionsTip.Fmt("//")));
             sb.AppendLine("BaseUrl: {0}".Fmt(Config.BaseUrl));
             sb.AppendLine();
@@ -134,8 +148,13 @@ namespace ServiceStack.NativeTypes.CSharp
 
             var orderedTypes = allTypes
                 .OrderBy(x => x.Namespace)
-                .ThenBy(x => x.Name);
+                .ThenBy(x => x.Name)
+                .ToList();
 
+            var insertCode = InsertCodeFilter?.Invoke(orderedTypes, Config);
+            if (insertCode != null)
+                sb.AppendLine(insertCode);
+            
             foreach (var type in orderedTypes)
             {
                 var fullTypeName = type.GetFullName();
@@ -144,8 +163,7 @@ namespace ServiceStack.NativeTypes.CSharp
                     if (!existingTypes.Contains(fullTypeName))
                     {
                         MetadataType response = null;
-                        MetadataOperationType operation;
-                        if (requestTypesMap.TryGetValue(type, out operation))
+                        if (requestTypesMap.TryGetValue(type, out var operation))
                         {
                             response = operation.Response;
                         }
@@ -194,6 +212,10 @@ namespace ServiceStack.NativeTypes.CSharp
                 }
             }
 
+            var addCode = AddCodeFilter?.Invoke(orderedTypes, Config);
+            if (addCode != null)
+                sb.AppendLine(addCode);
+
             if (lastNS != null)
                 sb.AppendLine("}");
             sb.AppendLine();
@@ -237,6 +259,8 @@ namespace ServiceStack.NativeTypes.CSharp
 
             var typeAccessor = !Config.MakeInternal ? "public" : "internal";
 
+            PreTypeFilter?.Invoke(sb, type);
+
             if (type.IsEnum.GetValueOrDefault())
             {
                 sb.AppendLine($"{typeAccessor} enum {Type(type.Name, type.GenericArgs)}");
@@ -249,6 +273,21 @@ namespace ServiceStack.NativeTypes.CSharp
                     {
                         var name = type.EnumNames[i];
                         var value = type.EnumValues?[i];
+                        if (type.EnumMemberValues != null && type.EnumMemberValues[i] != name)
+                        {
+                            AppendAttributes(sb, new List<MetadataAttribute> {
+                                new MetadataAttribute {
+                                    Name = "EnumMember",
+                                    Args = new List<MetadataPropertyType> {
+                                        new MetadataPropertyType {
+                                            Name = "Value",
+                                            Value = type.EnumMemberValues[i],
+                                            Type = "String",
+                                        }
+                                    }
+                                }
+                            });
+                        }
                         sb.AppendLine(value == null 
                             ? $"{name},"
                             : $"{name} = {value},");
@@ -276,9 +315,9 @@ namespace ServiceStack.NativeTypes.CSharp
                     var implStr = options.ImplementsFn();
                     if (!string.IsNullOrEmpty(implStr))
                         inheritsList.Add(implStr);
-
-                    type.Implements.Each(x => inheritsList.Add(Type(x)));
                 }
+
+                type.Implements.Each(x => inheritsList.Add(Type(x)));
 
                 var makeExtensible = Config.MakeDataContractsExtensible && type.Inherits == null;
                 if (makeExtensible)
@@ -289,7 +328,7 @@ namespace ServiceStack.NativeTypes.CSharp
                 sb.AppendLine("{");
                 sb = sb.Indent();
 
-                AddConstuctor(sb, type, options);
+                AddConstructor(sb, type, options);
                 AddProperties(sb, type,
                     includeResponseStatus: Config.AddResponseStatus && options.IsResponse
                         && type.Properties.Safe().All(x => x.Name != typeof(ResponseStatus).Name));
@@ -310,6 +349,8 @@ namespace ServiceStack.NativeTypes.CSharp
                 sb.AppendLine("}");
             }
 
+            PostTypeFilter?.Invoke(sb, type);
+
             if (!Config.ExcludeNamespace)
             {
                 sb = sb.UnIndent();
@@ -318,7 +359,7 @@ namespace ServiceStack.NativeTypes.CSharp
             return lastNS;
         }
 
-        private void AddConstuctor(StringBuilderWrapper sb, MetadataType type, CreateTypeOptions options)
+        private void AddConstructor(StringBuilderWrapper sb, MetadataType type, CreateTypeOptions options)
         {
             if (type.IsInterface())
                 return;
@@ -448,7 +489,7 @@ namespace ServiceStack.NativeTypes.CSharp
             if (value == null)
                 return "null";
             if (alias == "string")
-                return value.QuotedSafeValue();
+                return value.ToEscapedString();
             return value;
         }
 
@@ -459,6 +500,10 @@ namespace ServiceStack.NativeTypes.CSharp
 
         public string Type(string type, string[] genericArgs, bool includeNested=false)
         {
+            var useType = TypeFilter?.Invoke(type, genericArgs);
+            if (useType != null)
+                return useType;
+
             if (genericArgs != null)
             {
                 if (type == "Nullable`1")

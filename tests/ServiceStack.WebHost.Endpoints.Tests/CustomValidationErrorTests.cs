@@ -9,10 +9,11 @@ using ServiceStack.FluentValidation;
 using ServiceStack.FluentValidation.Results;
 using ServiceStack.Text;
 using ServiceStack.Validation;
+using ServiceStack.Web;
 
 namespace ServiceStack.WebHost.Endpoints.Tests
 {
-    public class CustomValidationAppHost : AppHostHttpListenerBase
+    public class CustomValidationAppHost : AppSelfHostBase
     {
         public CustomValidationAppHost() : base("Custom Error", typeof(CustomValidationAppHost).Assembly) { }
 
@@ -22,7 +23,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             container.RegisterValidators(typeof(MyValidator).Assembly);
         }
 
-        public static object CustomValidationError(ValidationResult validationResult, object errorDto)
+        public static object CustomValidationError(IRequest req, ValidationResult validationResult, object errorDto)
         {
             var firstError = validationResult.Errors[0];
             var dto = new MyCustomErrorDto { code = firstError.ErrorCode, error = firstError.ErrorMessage };
@@ -282,10 +283,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 return null;
 
             var errorResponse = ((HttpWebResponse)webEx.Response);
-            using (var reader = new StreamReader(errorResponse.GetResponseStream()))
-            {
-                return reader.ReadToEnd();
-            }
+            return errorResponse.GetResponseStream().ReadToEnd();
         }
     }
 }

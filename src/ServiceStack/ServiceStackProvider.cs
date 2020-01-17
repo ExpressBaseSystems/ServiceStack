@@ -5,6 +5,7 @@ using System.Linq;
 using ServiceStack.Auth;
 using ServiceStack.Caching;
 using ServiceStack.Configuration;
+using ServiceStack.FluentValidation;
 using ServiceStack.Messaging;
 using ServiceStack.Redis;
 using ServiceStack.Web;
@@ -90,8 +91,8 @@ namespace ServiceStack
                 if (!hasAnyRole)
                     return false;
 
-                var hasPermssions = permAttrs.All(x => x.HasAllPermissions(httpReq, authSession, userAuthRepo));
-                if (!hasPermssions)
+                var hasPermissions = permAttrs.All(x => x.HasAllPermissions(httpReq, authSession, userAuthRepo));
+                if (!hasPermissions)
                     return false;
 
                 var hasAnyPermission = anyPermAttrs.All(x => x.HasAnyPermissions(httpReq, authSession, userAuthRepo));
@@ -100,6 +101,19 @@ namespace ServiceStack
 
                 return true;
             }
+        }
+
+        /// <summary>
+        /// Resolve ServiceStack Validator in external ServiceStack provider class like ServiceStackController 
+        /// </summary>
+        public static IValidator<T> ResolveValidator<T>(this IHasServiceStackProvider provider)
+        {
+            var validator = provider.ServiceStackProvider.TryResolve<IValidator<T>>();
+            if (validator is IRequiresRequest requiresReq)
+            {
+                requiresReq.Request = provider.ServiceStackProvider.Request;
+            }
+            return validator;
         }
     }
 
@@ -148,8 +162,7 @@ namespace ServiceStack
         public object Execute(object requestDto)
         {
             var response = HostContext.ServiceController.Execute(requestDto, Request);
-            var ex = response as Exception;
-            if (ex != null)
+            if (response is Exception ex)
                 throw ex;
 
             return response;
@@ -163,8 +176,7 @@ namespace ServiceStack
         public object Execute(IRequest request)
         {
             var response = HostContext.ServiceController.Execute(request, applyFilters:true);
-            var ex = response as Exception;
-            if (ex != null)
+            if (response is Exception ex)
                 throw ex;
 
             return response;
@@ -224,13 +236,7 @@ namespace ServiceStack
 
         public virtual bool IsAuthenticated => this.GetSession().IsAuthenticated;
 
-        public virtual void PublishMessage<T>(T message)
-        {
-            if (MessageProducer == null)
-                throw new NullReferenceException("No IMessageFactory was registered, cannot PublishMessage");
-
-            MessageProducer.Publish(message);
-        }
+        public virtual void PublishMessage<T>(T message) => HostContext.AppHost.PublishMessage(MessageProducer, message);
 
         public virtual void Dispose()
         {

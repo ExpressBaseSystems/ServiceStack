@@ -1,5 +1,6 @@
 ﻿using ServiceStack.Web;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Threading.Tasks;
@@ -35,6 +36,10 @@ namespace ServiceStack
         /// </summary>
         public Func<IHttpResponse, Stream, Task<Stream>> TransformResponse { get; set; }
 
+        public HashSet<string> IgnoreResponseHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            HttpHeaders.TransferEncoding
+        };
+
         /// <summary>
         /// Required filters to specify which requests to proxy and which url to use.
         /// </summary>
@@ -60,6 +65,7 @@ namespace ServiceStack
                     ProxyResponseFilter = ProxyResponseFilter,
                     TransformRequest = TransformRequest,
                     TransformResponse = TransformResponse,
+                    IgnoreResponseHeaders = IgnoreResponseHeaders,
                 }
                 : null);
         }
@@ -74,9 +80,13 @@ namespace ServiceStack
         public Action<IHttpResponse, HttpWebResponse> ProxyResponseFilter { get; set; }
         public Func<IHttpRequest, Stream, Task<Stream>> TransformRequest { get; set; }
         public Func<IHttpResponse, Stream, Task<Stream>> TransformResponse { get; set; }
+        public HashSet<string> IgnoreResponseHeaders { get; set; }
 
         public override Task ProcessRequestAsync(IRequest req, IResponse response, string operationName)
         {
+            if (HostContext.ApplyCustomHandlerRequestFilters(req, response))
+                return TypeConstants.EmptyTask;
+
             var httpReq = (IHttpRequest)req;
             var proxyUrl = ResolveUrl(httpReq);
             try
@@ -124,13 +134,13 @@ namespace ServiceStack
             if (httpReq.ContentLength > 0)
             {
                 var inputStream = httpReq.InputStream;
-                if (TransformResponse != null)
+                if (TransformRequest != null)
                     inputStream = await TransformRequest(httpReq, inputStream) ?? inputStream;
 
                 using (inputStream)
                 using (var requestStream = await webReq.GetRequestStreamAsync())
                 {
-                    await inputStream.CopyToAsync(requestStream);
+                    await inputStream.WriteToAsync(requestStream);
                 }
             }
             var res = (IHttpResponse)httpReq.Response;
@@ -162,6 +172,9 @@ namespace ServiceStack
 
             foreach (var header in webRes.Headers.AllKeys)
             {
+                if (IgnoreResponseHeaders.Contains(header))
+                    continue;
+
                 var value = webRes.Headers[header];
                 res.AddHeader(header, value);
             }
@@ -173,10 +186,10 @@ namespace ServiceStack
             {
                 if (TransformResponse != null)
                     responseStream = await TransformResponse(res, responseStream) ?? responseStream;
-
+    
                 using (responseStream)
                 {
-                    await responseStream.CopyToAsync(res.OutputStream);
+                    await responseStream.WriteToAsync(res.OutputStream);
                 }
             }
 

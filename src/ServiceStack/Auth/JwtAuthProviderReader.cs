@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
 using ServiceStack.Configuration;
@@ -75,7 +76,7 @@ namespace ServiceStack.Auth
 
         /// <summary>
         /// Whether to encrypt JWE Payload (default false). 
-        /// Uses RSA-OAEP for Key Encryption and AES/128/CBC HMAC SHA256 for Conent Encryption
+        /// Uses RSA-OAEP for Key Encryption and AES/128/CBC HMAC SHA256 for Content Encryption
         /// </summary>
         public bool EncryptPayload { get; set; }
 
@@ -97,7 +98,24 @@ namespace ServiceStack.Auth
         /// <summary>
         /// The Audience to embed in the token. (default null)
         /// </summary>
-        public string Audience { get; set; }
+        public string Audience
+        {
+            get => Audiences.Join(",");
+            set
+            {
+                Audiences.Clear();
+                if (!string.IsNullOrEmpty(value))
+                {
+                    Audiences.Add(value);
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Embed Multiple Audiences in the token. (default none)
+        /// A JWT is valid if it contains ANY audience in this List
+        /// </summary>
+        public List<string> Audiences { get; set; }
 
         /// <summary>
         /// What Id to use to identify the Key used to sign the token. (default First 3 chars of Base64 Key)
@@ -140,7 +158,7 @@ namespace ServiceStack.Auth
         }
 
         /// <summary>
-        /// Convenient overload to intialize the Private Key via exported XML
+        /// Convenient overload to initialize the Private Key via exported XML
         /// </summary>
         public string PrivateKeyXml
         {
@@ -156,7 +174,7 @@ namespace ServiceStack.Auth
         public RSAParameters? PublicKey { get; set; }
 
         /// <summary>
-        /// Convenient overload to intialize the Public Key via exported XML
+        /// Convenient overload to initialize the Public Key via exported XML
         /// </summary>
         public string PublicKeyXml
         {
@@ -169,7 +187,16 @@ namespace ServiceStack.Auth
         /// </summary>
         public List<RSAParameters> FallbackPublicKeys { get; set; }
 
-        public List<RSAParameters> GetFallbackPublicKeys(IRequest req = null) => req.GetRuntimeConfig(nameof(FallbackPublicKeys), FallbackPublicKeys);
+        public List<RSAParameters> GetFallbackPublicKeys(IRequest req = null) => 
+            req.GetRuntimeConfig(nameof(FallbackPublicKeys), FallbackPublicKeys);
+
+        /// <summary>
+        /// Allow verification using multiple private keys for JWE tokens
+        /// </summary>
+        public List<RSAParameters> FallbackPrivateKeys { get; set; }
+
+        public List<RSAParameters> GetFallbackPrivateKeys(IRequest req = null) => 
+            req.GetRuntimeConfig(nameof(FallbackPrivateKeys), FallbackPrivateKeys);
 
         /// <summary>
         /// How long should JWT Tokens be valid for. (default 14 days)
@@ -228,6 +255,11 @@ namespace ServiceStack.Auth
         /// </summary>
         public bool RemoveInvalidTokenCookie { get; set; }
 
+        /// <summary>
+        /// Whether to also Include Token in ConvertSessionToTokenResponse   
+        /// </summary>
+        public bool IncludeJwtInConvertSessionToTokenResponse { get; set;  }
+
         public JwtAuthProviderReader()
             : base(null, Realm, Name)
         {
@@ -248,10 +280,12 @@ namespace ServiceStack.Auth
             RequireHashAlgorithm = true;
             RemoveInvalidTokenCookie = true;
             Issuer = "ssjwt";
+            Audiences = new List<string>();
             ExpireTokensIn = TimeSpan.FromDays(14);
             ExpireRefreshTokensIn = TimeSpan.FromDays(365);
             FallbackAuthKeys = new List<byte[]>();
             FallbackPublicKeys = new List<RSAParameters>();
+            FallbackPrivateKeys = new List<RSAParameters>();
 
             if (appSettings != null)
             {
@@ -260,10 +294,19 @@ namespace ServiceStack.Auth
                 EncryptPayload = appSettings.Get("jwt.EncryptPayload", EncryptPayload);
                 AllowInQueryString = appSettings.Get("jwt.AllowInQueryString", AllowInQueryString);
                 AllowInFormData = appSettings.Get("jwt.AllowInFormData", AllowInFormData);
+                IncludeJwtInConvertSessionToTokenResponse = appSettings.Get("jwt.IncludeJwtInConvertSessionToTokenResponse", IncludeJwtInConvertSessionToTokenResponse);
 
                 Issuer = appSettings.GetString("jwt.Issuer");
-                Audience = appSettings.GetString("jwt.Audience");
                 KeyId = appSettings.GetString("jwt.KeyId");
+                Audience = appSettings.GetString("jwt.Audience");
+                if (appSettings.Exists("jwt.Audiences"))
+                {
+                    var audiences = appSettings.GetList("jwt.Audiences");
+                    if (!audiences.IsEmpty())
+                    {
+                        Audiences = audiences.ToList();
+                    }
+                }
 
                 var hashAlg = appSettings.GetString("jwt.HashAlgorithm");
                 if (!string.IsNullOrEmpty(hashAlg))
@@ -297,6 +340,8 @@ namespace ServiceStack.Auth
                 var i = 1;
                 while ((base64Key = appSettings.GetString("jwt.PrivateKeyXml." + i++)) != null)
                 {
+                    FallbackPrivateKeys.Add(base64Key.ToPrivateRSAParameters());
+
                     var publicKey = base64Key.ToPublicRSAParameters();
                     FallbackPublicKeys.Add(publicKey);
                 }
@@ -341,6 +386,44 @@ namespace ServiceStack.Auth
 
         public override object Authenticate(IServiceBase authService, IAuthSession session, Authenticate request)
         {
+            // only allow verification of token
+            if (!string.IsNullOrEmpty(request.Password) && string.IsNullOrEmpty(request.UserName))
+            {
+                AuthenticateResponse toAuthResponse(IAuthSession jwtSession)
+                {
+                    var to = jwtSession.ConvertTo<AuthenticateResponse>();
+                    to.UserId = jwtSession.UserAuthId;
+                    return to;
+                }
+
+                var req = authService.Request;
+                
+                var bearerToken = request.Password;
+                var parts = bearerToken.Split('.');
+                if (parts.Length == 3)
+                {
+                    var jwtPayload = GetVerifiedJwtPayload(req, parts);
+                    if (jwtPayload == null) //not verified
+                        throw HttpError.Forbidden(ErrorMessages.TokenInvalid.Localize(req));
+                    
+                    return toAuthResponse(CreateSessionFromPayload(req, jwtPayload));
+                }
+                if (parts.Length == 5) //Encrypted JWE Token
+                {
+                    var jwtPayload = GetVerifiedJwtPayload(req, parts);
+                    if (jwtPayload == null) //not verified
+                        throw HttpError.Forbidden(ErrorMessages.TokenInvalid.Localize(req));
+
+                    if (ValidateToken != null)
+                    {
+                        if (!ValidateToken(jwtPayload, req))
+                            throw HttpError.Forbidden(ErrorMessages.TokenInvalid.Localize(req));
+                    }
+
+                    return toAuthResponse(CreateSessionFromPayload(req, jwtPayload));
+                }
+            }
+   
             throw new NotImplementedException("JWT Authenticate() should not be called directly");
         }
 
@@ -416,11 +499,11 @@ namespace ServiceStack.Auth
         /// </summary>
         public JsonObject GetValidJwtPayload(IRequest req, string jwt)
         {
-            var vefifiedPayload = GetVerifiedJwtPayload(req, jwt.Split('.'));
-            var invalidError = GetInvalidJwtPayloadError(vefifiedPayload);
+            var verifiedPayload = GetVerifiedJwtPayload(req, jwt.Split('.'));
+            var invalidError = GetInvalidJwtPayloadError(verifiedPayload);
             return invalidError != null
                 ? null
-                : vefifiedPayload;
+                : verifiedPayload;
         }
         
         /// <summary>
@@ -445,7 +528,7 @@ namespace ServiceStack.Auth
 
                 //Potential Security Risk for relying on user-specified algorithm: https://auth0.com/blog/2015/03/31/critical-vulnerabilities-in-json-web-token-libraries/
                 if (RequireHashAlgorithm && algorithm != HashAlgorithm)
-                    throw new NotSupportedException($"Invalid algoritm '{algorithm}', expected '{HashAlgorithm}'");
+                    throw new NotSupportedException($"Invalid algorithm '{algorithm}', expected '{HashAlgorithm}'");
 
                 if (!VerifyPayload(req, algorithm, bytesToSign, signatureBytes))
                     return null;
@@ -456,62 +539,85 @@ namespace ServiceStack.Auth
             }
             if (parts.Length == 5) //Encrypted JWE Token
             {
-                var jweHeaderBase64Url = parts[0];
-                var jweEncKeyBase64Url = parts[1];
-                var ivBase64Url = parts[2];
-                var cipherTextBase64Url = parts[3];
-                var tagBase64Url = parts[4];
+                return GetVerifiedJwePayload(req, parts);
+            }
 
-                var sentTag = tagBase64Url.FromBase64UrlSafe();
-                var aadBytes = (jweHeaderBase64Url + "." + jweEncKeyBase64Url).ToUtf8Bytes();
-                var iv = ivBase64Url.FromBase64UrlSafe();
-                var cipherText = cipherTextBase64Url.FromBase64UrlSafe();
+            throw new ArgumentException(ErrorMessages.TokenInvalid.Localize(req));
+        }
 
-                var privateKey = GetPrivateKey(req);
-                if (privateKey == null)
-                    throw new Exception("PrivateKey required to decrypt JWE Token");
+        public JsonObject GetVerifiedJwePayload(IRequest req, string[] parts)
+        {
+            if (!VerifyJwePayload(req, parts, out var iv, out var cipherText, out var cryptKey))
+                return null;
 
-                var jweEncKey = jweEncKeyBase64Url.FromBase64UrlSafe();
-                var cryptAuthKeys256 = RsaUtils.Decrypt(jweEncKey, privateKey.Value, UseRsaKeyLength);
+            var aes = Aes.Create();
+            aes.KeySize = 128;
+            aes.BlockSize = 128;
+            aes.Mode = CipherMode.CBC;
+            aes.Padding = PaddingMode.PKCS7;
+            using (aes)
+            using (var decryptor = aes.CreateDecryptor(cryptKey, iv))
+            using (var ms = MemoryStreamFactory.GetStream(cipherText))
+            using (var cryptStream = new CryptoStream(ms, decryptor, CryptoStreamMode.Read))
+            {
+                var jwtPayloadBytes = cryptStream.ReadFully();
+                return JsonObject.Parse(jwtPayloadBytes.FromUtf8Bytes());
+            }
+        }
 
-                var authKey = new byte[128 / 8];
-                var cryptKey = new byte[128 / 8];
+        public bool VerifyJwePayload(IRequest req, string[] parts, out byte[] iv, out byte[] cipherText, out byte[] cryptKey)
+        {
+            var jweHeaderBase64Url = parts[0];
+            var jweEncKeyBase64Url = parts[1];
+            var ivBase64Url = parts[2];
+            var cipherTextBase64Url = parts[3];
+            var tagBase64Url = parts[4];
+
+            var sentTag = tagBase64Url.FromBase64UrlSafe();
+            var aadBytes = (jweHeaderBase64Url + "." + jweEncKeyBase64Url).ToUtf8Bytes();
+            iv = ivBase64Url.FromBase64UrlSafe();
+            cipherText = cipherTextBase64Url.FromBase64UrlSafe();
+            var jweEncKey = jweEncKeyBase64Url.FromBase64UrlSafe();
+
+            var privateKey = GetPrivateKey(req);
+            if (privateKey == null)
+                throw new Exception("PrivateKey required to decrypt JWE Token");
+            
+            var allPrivateKeys = new List<RSAParameters> {
+                privateKey.Value
+            };
+            allPrivateKeys.AddRange(GetFallbackPrivateKeys(req));
+
+            var authKey = new byte[128 / 8];
+            cryptKey = new byte[128 / 8];
+
+            foreach (var key in allPrivateKeys)
+            {
+                var cryptAuthKeys256 = RsaUtils.Decrypt(jweEncKey, key, UseRsaKeyLength);
+
                 Buffer.BlockCopy(cryptAuthKeys256, 0, authKey, 0, authKey.Length);
                 Buffer.BlockCopy(cryptAuthKeys256, authKey.Length, cryptKey, 0, cryptKey.Length);
 
                 using (var hmac = new HMACSHA256(authKey))
-                using (var encryptedStream = new MemoryStream())
+                using (var encryptedStream = MemoryStreamFactory.GetStream())
+                using (var writer = new BinaryWriter(encryptedStream))
                 {
-                    using (var writer = new BinaryWriter(encryptedStream))
-                    {
-                        writer.Write(aadBytes);
-                        writer.Write(iv);
-                        writer.Write(cipherText);
-                        writer.Flush();
+                    writer.Write(aadBytes);
+                    writer.Write(iv);
+                    writer.Write(cipherText);
+                    writer.Flush();
 
-                        var calcTag = hmac.ComputeHash(encryptedStream.ToArray());
+                    var calcTag = hmac.ComputeHash(encryptedStream.GetBuffer(), 0, (int) encryptedStream.Length);
 
-                        if (!calcTag.EquivalentTo(sentTag))
-                            return null;
-                    }
-                }
-
-                var aes = Aes.Create();
-                aes.KeySize = 128;
-                aes.BlockSize = 128;
-                aes.Mode = CipherMode.CBC;
-                aes.Padding = PaddingMode.PKCS7;
-                using (aes)
-                using (var decryptor = aes.CreateDecryptor(cryptKey, iv))
-                using (var ms = MemoryStreamFactory.GetStream(cipherText))
-                using (var cryptStream = new CryptoStream(ms, decryptor, CryptoStreamMode.Read))
-                {
-                    var jwtPayloadBytes = cryptStream.ReadFully();
-                    return JsonObject.Parse(jwtPayloadBytes.FromUtf8Bytes());
+                    if (calcTag.EquivalentTo(sentTag))
+                        return true;
                 }
             }
 
-            throw new ArgumentException(ErrorMessages.TokenInvalid.Localize(req));
+            iv = null;
+            cipherText = null;
+            cryptKey = null;
+            return false;
         }
 
         public IAuthSession ConvertJwtToSession(IRequest req, string jwt)
@@ -545,7 +651,7 @@ namespace ServiceStack.Auth
 
             PopulateSessionFilter?.Invoke(session, jwtPayload, req);
 
-            HostContext.AppHost.OnSessionFilter(session, sessionId);
+            HostContext.AppHost.OnSessionFilter(req, session, sessionId);
             return session;
         }
 
@@ -585,8 +691,13 @@ namespace ServiceStack.Auth
 
             if (jwtPayload.TryGetValue("aud", out var audience))
             {
-                if (audience != Audience)
-                    return "Invalid Audience: " + audience;
+                var jwtAudiences = audience.FromJson<List<string>>();
+                if (jwtAudiences?.Count > 0 && Audiences.Count > 0)
+                {
+                    var containsAnyAudience = jwtAudiences.Any(x => Audiences.Contains(x));
+                    if (!containsAnyAudience)
+                        return "Invalid Audience: " + audience;
+                }
             }
 
             return null;
@@ -597,7 +708,7 @@ namespace ServiceStack.Auth
             var isHmac = HmacAlgorithms.ContainsKey(algorithm);
             var isRsa = RsaSignAlgorithms.ContainsKey(algorithm);
             if (!isHmac && !isRsa)
-                throw new NotSupportedException("Invalid algoritm: " + algorithm);
+                throw new NotSupportedException("Invalid algorithm: " + algorithm);
 
             if (isHmac)
             {
@@ -654,12 +765,12 @@ namespace ServiceStack.Auth
             var isHmac = HmacAlgorithms.ContainsKey(HashAlgorithm);
             var isRsa = RsaSignAlgorithms.ContainsKey(HashAlgorithm);
             if (!isHmac && !isRsa)
-                throw new NotSupportedException("Invalid algoritm: " + HashAlgorithm);
+                throw new NotSupportedException("Invalid algorithm: " + HashAlgorithm);
 
             if (isHmac && AuthKey == null)
-                throw new ArgumentNullException("AuthKey", "An AuthKey is Required to use JWT, e.g: new JwtAuthProvider { AuthKey = AesUtils.CreateKey() }");
-            else if (isRsa && PrivateKey == null && PublicKey == null)
-                throw new ArgumentNullException("PrivateKey", "PrivateKey is Required to use JWT with " + HashAlgorithm);
+                throw new ArgumentNullException(nameof(AuthKey), "An AuthKey is Required to use JWT, e.g: new JwtAuthProvider { AuthKey = AesUtils.CreateKey() }");
+            if (isRsa && PrivateKey == null && PublicKey == null)
+                throw new ArgumentNullException(nameof(PrivateKey), "PrivateKey is Required to use JWT with " + HashAlgorithm);
 
             if (KeyId == null)
                 KeyId = GetKeyId(null);
@@ -682,7 +793,7 @@ namespace ServiceStack.Auth
 
             authCtx.AuthService.Request.RemoveSession(authCtx.AuthService.GetSessionId());
 
-            return new HttpResult(authCtx.AuthResponse)
+            var httpResult = new HttpResult(authCtx.AuthResponse)
             {
                 Cookies = {
                     new Cookie(Keywords.TokenCookie, authCtx.AuthResponse.BearerToken, Cookies.RootPath) {
@@ -692,6 +803,15 @@ namespace ServiceStack.Auth
                     }
                 }
             };
+
+            var isHtml = authCtx.AuthService.Request.ResponseContentType.MatchesContentType(MimeTypes.Html);
+            if (isHtml)
+            {
+                httpResult.StatusCode = HttpStatusCode.Redirect;
+                httpResult.Location = authCtx.ReferrerUrl;
+            }
+
+            return httpResult;
         }
     }
 

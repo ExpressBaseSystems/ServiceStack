@@ -115,6 +115,11 @@ namespace ServiceStack
         /// Add Response Filters for MQ/TCP Responses
         /// </summary>
         List<Action<IRequest, IResponse, object>> GlobalMessageResponseFilters { get; }
+        
+        /// <summary>
+        /// Add Async Response Filters for MQ/TCP Responses
+        /// </summary>
+        List<Func<IRequest, IResponse, object, Task>> GlobalMessageResponseFiltersAsync { get; }
 
         /// <summary>
         /// Add Request Filter for a specific Request DTO Type
@@ -206,6 +211,11 @@ namespace ServiceStack
         List<HttpHandlerResolverDelegate> CatchAllHandlers { get; }
 
         /// <summary>
+        /// Provide a fallback handler for not found requests (last filter in Request Pipeline)
+        /// </summary>
+        List<HttpHandlerResolverDelegate> FallbackHandlers { get; }
+
+        /// <summary>
         /// Use a fall-back Error Handler for handling global errors
         /// </summary>
         IServiceStackHandler GlobalHtmlErrorHttpHandler { get; }
@@ -272,7 +282,22 @@ namespace ServiceStack
         IVirtualFiles VirtualFiles { get; set; }
         
         /// <summary>
-        /// Register additional Virtual File Sources
+        /// The WebRoot VFS Directory of the cascading VirtualFileSources 
+        /// </summary>
+        IVirtualDirectory RootDirectory { get; }
+        
+        /// <summary>
+        /// The ContentRoot VFS Directory of the read/write VirtualFiles Provider 
+        /// </summary>
+        IVirtualDirectory ContentRootDirectory { get; }
+        
+        /// <summary>
+        /// Insert Virtual File Sources at the beginning so they take precedence over built-in sources 
+        /// </summary>
+        List<IVirtualPathProvider> InsertVirtualFileSources { get; set; }
+        
+        /// <summary>
+        /// Add additional Virtual File Sources at the end after built-in Virtual File Sources 
         /// </summary>
         List<IVirtualPathProvider> AddVirtualFileSources { get; }
 
@@ -296,11 +321,16 @@ namespace ServiceStack
         /// Execute MQ Message in ServiceStack
         /// </summary>
         object ExecuteMessage(IMessage mqMessage);
-
+        
         /// <summary>
         /// Access Service Controller for ServiceStack
         /// </summary>
         ServiceController ServiceController { get; }
+
+        /// <summary>
+        /// Publish Message to be processed by AppHost
+        /// </summary>
+        void PublishMessage<T>(IMessageProducer messageProducer, T message);
     }
 
     public interface IHasAppHost

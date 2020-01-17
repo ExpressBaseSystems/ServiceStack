@@ -103,7 +103,7 @@ namespace ServiceStack
             if (response != null)
                 return response;
 
-            if (cache.TryGetValue(requestUri, out var entry))
+            if ((webRes as HttpWebResponse)?.Method == HttpMethods.Get && cache.TryGetValue(requestUri, out var entry))
             {
                 if (webEx.IsNotModified())
                 {
@@ -323,6 +323,21 @@ namespace ServiceStack
         public Task PutAsync(IReturnVoid requestDto)
         {
             return client.PutAsync(requestDto);
+        }
+
+        public Task<TResponse> PatchAsync<TResponse>(IReturn<TResponse> requestDto)
+        {
+            return client.PatchAsync(requestDto);
+        }
+
+        public Task<TResponse> PatchAsync<TResponse>(object requestDto)
+        {
+            return client.PatchAsync<TResponse>(requestDto);
+        }
+
+        public Task PatchAsync(IReturnVoid requestDto)
+        {
+            return client.PatchAsync(requestDto);
         }
 
         public Task<TResponse> SendAsync<TResponse>(string httpMethod, string absoluteUrl, object request, CancellationToken token = default(CancellationToken))
@@ -580,6 +595,12 @@ namespace ServiceStack
         {
             get => client.SessionId;
             set => client.SessionId = value;
+        }
+
+        public string BearerToken
+        {
+            get => client.BearerToken;
+            set => client.BearerToken = value;
         }
 
         public int Version

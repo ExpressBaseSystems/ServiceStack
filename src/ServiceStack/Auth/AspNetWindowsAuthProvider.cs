@@ -40,6 +40,13 @@ namespace ServiceStack.Auth
                     .SelectMany(x => x.RequiredRoles);
 
                 requiredRoles.Each(x => AllRoles.AddIfNotExists(x));
+
+                var requireAnyRoles = host.Metadata.OperationsMap
+                    .SelectMany(x => x.Key.AllAttributes<RequiresAnyRoleAttribute>()
+                        .Concat(x.Value.ServiceType.AllAttributes<RequiresAnyRoleAttribute>()))
+                    .SelectMany(x => x.RequiredRoles);
+
+                requireAnyRoles.Each(x => AllRoles.AddIfNotExists(x));
             });
         }
 
@@ -57,8 +64,8 @@ namespace ServiceStack.Auth
 
         public bool AllowAllWindowsAuthUsers
         {
-            get { return LimitAccessToRoles == null; }
-            set { LimitAccessToRoles = null; }
+            get => LimitAccessToRoles == null;
+            set => LimitAccessToRoles = null;
         }
 
         public override bool IsAuthorized(IAuthSession session, IAuthTokens tokens, Authenticate request = null)
@@ -198,8 +205,7 @@ namespace ServiceStack.Auth
         public static IPrincipal GetUser(this IRequest req)
         {
             var aspReq = req as AspNetRequest;
-            var aspReqBase = aspReq?.OriginalRequest as HttpRequestBase;
-            if (aspReqBase != null)
+            if (aspReq?.OriginalRequest is HttpRequestBase aspReqBase)
             {
                 var user = aspReqBase.RequestContext.HttpContext.GetUser();
                 return user.GetUserName() == null ? null : user;

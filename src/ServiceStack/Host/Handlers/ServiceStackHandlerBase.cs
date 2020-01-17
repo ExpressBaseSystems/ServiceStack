@@ -157,29 +157,46 @@ namespace ServiceStack.Host.Handlers
             return batchedResponses;
         }
 
-        public static object DeserializeHttpRequest(Type operationType, IRequest httpReq, string contentType)
+        public static Task<object> DeserializeHttpRequestAsync(Type operationType, IRequest httpReq, string contentType)
         {
             var httpMethod = httpReq.Verb;
             var queryString = httpReq.QueryString;
             var hasRequestBody = httpReq.ContentType != null && httpReq.ContentLength > 0;
 
             if (!hasRequestBody
-                && (httpMethod == HttpMethods.Get || httpMethod == HttpMethods.Delete || httpMethod == HttpMethods.Options))
+                && (httpMethod == HttpMethods.Get || httpMethod == HttpMethods.Delete || 
+                    httpMethod == HttpMethods.Options || httpMethod == HttpMethods.Head))
             {
-                return KeyValueDataContractDeserializer.Instance.Parse(queryString, operationType);
+                return KeyValueDataContractDeserializer.Instance.Parse(queryString, operationType).InTask();
             }
 
             var isFormData = httpReq.HasAnyOfContentTypes(MimeTypes.FormUrlEncoded, MimeTypes.MultiPartFormData);
             if (isFormData)
             {
-                return KeyValueDataContractDeserializer.Instance.Parse(httpReq.FormData, operationType);
+                if (queryString.Count > 0)
+                {
+                    var instance = KeyValueDataContractDeserializer.Instance.Parse(queryString, operationType);
+                    return KeyValueDataContractDeserializer.Instance.Populate(instance, httpReq.FormData, operationType).InTask();
+                }
+                return KeyValueDataContractDeserializer.Instance.Parse(httpReq.FormData, operationType).InTask();
             }
 
-            var request = CreateContentTypeRequest(httpReq, operationType, contentType);
-            return request;
+            return CreateContentTypeRequestAsync(httpReq, operationType, contentType);
         }
 
-        protected static object CreateContentTypeRequest(IRequest httpReq, Type requestType, string contentType)
+        static long GetStreamLengthSafe(Stream stream)
+        {
+            try
+            {
+                return stream.Length; //can throw NotSupportedException
+            }
+            catch (Exception e)
+            {
+                return -1;
+            }
+        }
+
+        protected static Task<object> CreateContentTypeRequestAsync(IRequest httpReq, Type requestType, string contentType)
         {
             try
             {
@@ -190,7 +207,7 @@ namespace ServiceStack.Host.Handlers
                         || (HttpUtils.HasRequestBody(httpReq.Verb) && 
                                 (httpReq.GetContentEncoding() != null
 #if NETSTANDARD2_0
-                                || httpReq.InputStream.Length > 0 // AWS API Gateway reports ContentLength=0,ContentEncoding=null
+                                || GetStreamLengthSafe(httpReq.InputStream) > 0 // AWS API Gateway reports ContentLength=0,ContentEncoding=null
 #endif
                                 ));
 
@@ -199,7 +216,7 @@ namespace ServiceStack.Host.Handlers
 
                     if (hasContentBody)
                     {
-                        var deserializer = HostContext.ContentTypes.GetStreamDeserializer(contentType);
+                        var deserializer = HostContext.ContentTypes.GetStreamDeserializerAsync(contentType);
                         if (deserializer != null)
                         {
                             return deserializer(requestType, httpReq.InputStream);
@@ -212,7 +229,7 @@ namespace ServiceStack.Host.Handlers
                 var msg = $"Could not deserialize '{contentType}' request using {requestType}'\nError: {ex}";
                 throw new SerializationException(msg, ex);
             }
-            return requestType.CreateInstance(); //Return an empty DTO, even for empty request bodies
+            return requestType.CreateInstance().InTask(); //Return an empty DTO, even for empty request bodies
         }
 
         protected static object GetCustomRequestFromBinder(IRequest httpReq, Type requestType)

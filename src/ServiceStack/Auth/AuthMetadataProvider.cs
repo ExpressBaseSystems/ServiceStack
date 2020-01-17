@@ -9,15 +9,13 @@ namespace ServiceStack.Auth
     {
         static readonly ILog Log = LogManager.GetLogger(typeof(AuthMetadataProvider));
 
-        public static string DefaultNoProfileImgUrl = "https://raw.githubusercontent.com/ServiceStack/Assets/master/img/apps/no-profile64.png";
-
         public const string ProfileUrlKey = "profileUrl";
 
         public string NoProfileImgUrl { get; set; }
 
         public AuthMetadataProvider()
         {
-            NoProfileImgUrl = DefaultNoProfileImgUrl;
+            NoProfileImgUrl = Svg.GetDataUri(Svg.Icons.DefaultProfile);
         }
 
         public virtual void AddMetadata(IAuthTokens tokens, Dictionary<string, string> authInfo)
@@ -83,12 +81,14 @@ namespace ServiceStack.Auth
             if (authSession == null)
                 return defaultUrl ?? NoProfileImgUrl;
 
-            foreach (var authTokens in authSession.ProviderOAuthAccess)
+            if (!string.IsNullOrEmpty(authSession.ProfileUrl))
+                return authSession.ProfileUrl;
+
+            foreach (var authTokens in authSession.ProviderOAuthAccess.Safe())
             {
                 if (authTokens.Items != null)
                 {
-                    string profileUrl;
-                    if (authTokens.Items.TryGetValue(ProfileUrlKey, out profileUrl))
+                    if (authTokens.Items.TryGetValue(ProfileUrlKey, out var profileUrl))
                         return profileUrl.SanitizeOAuthUrl();
                 }
             }

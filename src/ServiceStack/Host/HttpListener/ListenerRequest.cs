@@ -1,8 +1,10 @@
+
+
+using System.Threading.Tasks;
 #if !NETSTANDARD2_0 
 
 //Copyright (c) ServiceStack, Inc. All Rights Reserved.
 //License: https://raw.github.com/ServiceStack/ServiceStack/master/license.txt
-
 using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
@@ -16,7 +18,7 @@ using ServiceStack.Web;
 
 namespace ServiceStack.Host.HttpListener
 {
-    public partial class ListenerRequest : IHttpRequest, IHasResolver, IHasVirtualFiles
+    public partial class ListenerRequest : IHttpRequest, IHasResolver, IHasVirtualFiles, IHasBufferedStream
     {
         private IResolver resolver;
         public IResolver Resolver
@@ -84,17 +86,6 @@ namespace ServiceStack.Host.HttpListener
 
         public object Dto { get; set; }
 
-        public string GetRawBody()
-        {
-            if (BufferedStream != null)
-            {
-                return BufferedStream.ToArray().FromUtf8Bytes();
-            }
-
-            var reader = new StreamReader(InputStream);
-            return reader.ReadToEnd();
-        }
-
         private string rawUrl;
         public string RawUrl => rawUrl ?? (rawUrl = request.RawUrl.Replace("//", "/"));
 
@@ -119,7 +110,9 @@ namespace ServiceStack.Host.HttpListener
 
         public string Authorization => string.IsNullOrEmpty(request.Headers[HttpHeaders.Authorization]) ? null : request.Headers[HttpHeaders.Authorization];
 
-        public bool IsSecureConnection => request.IsSecureConnection || XForwardedProtocol == "https";
+        public bool IsSecureConnection => request.IsSecureConnection 
+            || XForwardedProtocol == "https" 
+            || (RequestAttributes & RequestAttributes.Secure) == RequestAttributes.Secure;
 
         public string[] AcceptTypes => request.AcceptTypes;
 
@@ -214,16 +207,26 @@ namespace ServiceStack.Host.HttpListener
             }
         }
 
+        public MemoryStream BufferedStream { get; set; }
+        public Stream InputStream => this.GetInputStream(BufferedStream ?? request.InputStream);
+
         public bool UseBufferedStream
         {
             get => BufferedStream != null;
             set => BufferedStream = value
-                ? BufferedStream ?? new MemoryStream(request.InputStream.ReadFully())
+                ? BufferedStream ?? request.InputStream.CreateBufferedStream()
                 : null;
         }
 
-        public MemoryStream BufferedStream { get; set; }
-        public Stream InputStream => this.GetInputStream(BufferedStream ?? request.InputStream);
+        public string GetRawBody()
+        {
+            if (BufferedStream != null)
+                return BufferedStream.ReadBufferedStreamToEnd(this);
+
+            return InputStream.ReadToEnd();
+        }
+
+        public Task<string> GetRawBodyAsync() => Task.FromResult(GetRawBody());
 
         public long ContentLength => request.ContentLength64;
 

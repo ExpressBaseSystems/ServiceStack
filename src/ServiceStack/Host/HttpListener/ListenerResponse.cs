@@ -71,6 +71,8 @@ namespace ServiceStack.Host.HttpListener
             response.Redirect(url);
         }
 
+        public object Dto { get; set; }
+
         public MemoryStream BufferedStream { get; set; }
         public Stream OutputStream => BufferedStream ?? response.OutputStream;
 
@@ -78,43 +80,33 @@ namespace ServiceStack.Host.HttpListener
         {
             get => BufferedStream != null;
             set => BufferedStream = value
-                ? BufferedStream ?? new MemoryStream()
+                ? BufferedStream ?? this.CreateBufferedStream()
                 : null;
         }
 
-        private void FlushBufferIfAny()
-        {
-            if (BufferedStream == null)
-                return;
-
-            var bytes = BufferedStream.ToArray();
-            try {
-                SetContentLength(bytes.Length); //safe to set Length in Buffered Response
-            } catch {}
-
-            response.OutputStream.Write(bytes, 0, bytes.Length);
-            BufferedStream = MemoryStreamFactory.GetStream();
-        }
-
-        public object Dto { get; set; }
-
         public void Close()
         {
-            if (!this.IsClosed)
+            if (this.IsClosed) return;
+            this.IsClosed = true;
+
+            try
             {
-                this.IsClosed = true;
+                this.FlushBufferIfAny(BufferedStream, response.OutputStream);
+                BufferedStream?.Dispose();
+                BufferedStream = null;
 
-                try
-                {
-                    FlushBufferIfAny();
-
-                    this.response.CloseOutputStream();
-                }
-                catch (Exception ex)
-                {
-                    Log.Error("Error closing HttpListener output stream", ex);
-                }
+                this.response.CloseOutputStream();
             }
+            catch (Exception ex)
+            {
+                Log.Error("Error closing HttpListener output stream", ex);
+            }
+        }
+
+        public Task CloseAsync(CancellationToken token = default(CancellationToken))
+        {
+            Close();
+            return TypeConstants.EmptyTask;
         }
 
         public void End()
@@ -124,26 +116,13 @@ namespace ServiceStack.Host.HttpListener
 
         public void Flush()
         {
-            FlushBufferIfAny();
-
+            this.FlushBufferIfAny(BufferedStream, response.OutputStream);
             response.OutputStream.Flush();
         }
 
-        public async Task FlushAsync(CancellationToken token = new CancellationToken())
+        public async Task FlushAsync(CancellationToken token = default(CancellationToken))
         {
-            if (BufferedStream != null)
-            {
-                var bytes = BufferedStream.ToArray();
-                try
-                {
-                    SetContentLength(bytes.Length); //safe to set Length in Buffered Response
-                }
-                catch { }
-
-                await response.OutputStream.WriteAsync(bytes, token);
-                BufferedStream = MemoryStreamFactory.GetStream();
-            }
-
+            await this.FlushBufferIfAnyAsync(BufferedStream, response.OutputStream, token);
             await response.OutputStream.FlushAsync(token);
         }
 
@@ -179,7 +158,7 @@ namespace ServiceStack.Host.HttpListener
 
         public void SetCookie(Cookie cookie)
         {
-            if (!HostContext.AppHost.AllowSetCookie(Request, cookie.Name))
+            if (!HostContext.AppHost.SetCookieFilter(Request, cookie))
                 return;
 
             var cookieStr = cookie.AsHeaderValue();

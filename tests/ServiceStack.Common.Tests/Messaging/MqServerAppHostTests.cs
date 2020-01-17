@@ -1,8 +1,10 @@
 ﻿#if !NETCORE_SUPPORT
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Funq;
 using NUnit.Framework;
+using ServiceStack.Auth;
 using ServiceStack.FluentValidation;
 using ServiceStack.Messaging;
 using ServiceStack.Messaging.Redis;
@@ -10,10 +12,11 @@ using ServiceStack.RabbitMq;
 using ServiceStack.Redis;
 using ServiceStack.Text;
 using ServiceStack.Validation;
+using ServiceStack.Web;
 
 namespace ServiceStack.Common.Tests.Messaging
 {
-    [TestFixture]
+    [TestFixture, Ignore("Can cause CI to hang")]
     public class RedisMqServerAppHostTests : MqServerAppHostTests
     {
         public RedisMqServerAppHostTests()
@@ -28,7 +31,7 @@ namespace ServiceStack.Common.Tests.Messaging
         }
     }
 
-    [TestFixture]
+    [TestFixture, Ignore("Can cause CI to hang")]
     public class RabbitMqServerAppHostTests : MqServerAppHostTests
     {
         public RabbitMqServerAppHostTests()
@@ -44,12 +47,15 @@ namespace ServiceStack.Common.Tests.Messaging
                 channel.PurgeQueue<ValidateTestMq>();
                 channel.PurgeQueue<ValidateTestMqResponse>();
                 channel.PurgeQueue<ThrowGenericError>();
+                channel.PurgeQueue<ThrowVoid>();
             }
         }
 
         public override IMessageService CreateMqServer(int retryCount = 1)
         {
-            return new RabbitMqServer { RetryCount = 1 };
+            return new RabbitMqServer(TestsConfig.RabbitMqHost) {
+                RetryCount = 1
+            };
         }
     }
 
@@ -59,6 +65,15 @@ namespace ServiceStack.Common.Tests.Messaging
         public override IMessageService CreateMqServer(int retryCount = 1)
         {
             return new InMemoryTransientMessageService { RetryCount = retryCount };
+        }
+    }
+
+    [TestFixture]
+    public class BackgroundMqServerAppHostTests : MqServerAppHostTests
+    {
+        public override IMessageService CreateMqServer(int retryCount = 1)
+        {
+            return new BackgroundMqService { RetryCount = retryCount };
         }
     }
 
@@ -115,6 +130,11 @@ namespace ServiceStack.Common.Tests.Messaging
         }
     }
 
+    public class ThrowVoid
+    {
+        public string Content { get; set; }
+    }
+        
     public class TestMqService : IService
     {
         public object Any(AnyTestMq request)
@@ -142,9 +162,14 @@ namespace ServiceStack.Common.Tests.Messaging
         {
             throw new ArgumentException("request");
         }
+
+        public void Any(ThrowVoid request)
+        {
+            throw new InvalidOperationException("this is an invalid operation");
+        }
     }
 
-    public class MqTestsAppHost : AppHostHttpListenerBase
+    public class MqTestsAppHost : AppSelfHostBase
     {
         private readonly Func<IMessageService> createMqServerFn;
 
@@ -167,16 +192,17 @@ namespace ServiceStack.Common.Tests.Messaging
             mqServer.RegisterHandler<PostTestMq>(ExecuteMessage);
             mqServer.RegisterHandler<ValidateTestMq>(ExecuteMessage);
             mqServer.RegisterHandler<ThrowGenericError>(ExecuteMessage);
+            mqServer.RegisterHandler<ThrowVoid>(ExecuteMessage);
 
-            mqServer.Start();
+            AfterInitCallbacks.Add(appHost => mqServer.Start());
         }
     }
-
+    
     [TestFixture]
     public abstract class MqServerAppHostTests
     {
-        protected const string ListeningOn = "http://*:1337/";
-        public const string Host = "http://localhost:1337";
+        protected const string ListeningOn = "http://*:2001/";
+        public const string Host = "http://localhost:2001";
         private const string BaseUri = Host + "/";
 
         protected ServiceStackHost appHost;
@@ -195,6 +221,26 @@ namespace ServiceStack.Common.Tests.Messaging
         public virtual void TestFixtureTearDown()
         {
             appHost.Dispose();
+        }
+
+        [Test]
+        public void Does_send_to_DLQ_when_thrown_from_void_Service()
+        {
+            using (var mqFactory = appHost.TryResolve<IMessageFactory>())
+            {
+                var request = new ThrowVoid { Content = "Test" };
+
+                using (var mqProducer = mqFactory.CreateMessageProducer())
+                using (var mqClient = mqFactory.CreateMessageQueueClient())
+                {
+                    mqProducer.Publish(request);
+
+                    var msg = mqClient.Get<ThrowVoid>(QueueNames<ThrowVoid>.Dlq, null);
+                    mqClient.Ack(msg);
+
+                    Assert.That(msg.Error.ErrorCode, Is.EqualTo("InvalidOperationException"));
+                }
+            }
         }
 
         [Test]
@@ -380,7 +426,7 @@ namespace ServiceStack.Common.Tests.Messaging
                 {
                     var requestMsg = new Message<ThrowGenericError>(request)
                     {
-                        ReplyTo = "mq:{0}.replyto".Fmt(request.GetType().Name)
+                        ReplyTo = $"mq:{request.GetType().Name}.replyto"
                     };
                     mqProducer.Publish(requestMsg);
 

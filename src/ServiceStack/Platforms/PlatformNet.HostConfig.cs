@@ -15,7 +15,7 @@ namespace ServiceStack.Platforms
     {
         const string NamespacesAppSettingsKey = "servicestack.razor.namespaces";
 
-        public override void InitHostConifg(HostConfig config)
+        public override void InitHostConfig(HostConfig config)
         {
             if (config.HandlerFactoryPath == null)
             {
@@ -26,7 +26,7 @@ namespace ServiceStack.Platforms
         public override HashSet<string> GetRazorNamespaces()
         {
             var razorNamespaces = new HashSet<string>();
-            //Infer from <system.web.webPages.razor> - what VS.NET's intell-sense uses
+            //Infer from <system.web.webPages.razor> - what VS.NET's intelli-sense uses
             var configPath = GetAppConfigPath();
             if (configPath != null)
             {
@@ -103,7 +103,7 @@ namespace ServiceStack.Platforms
                 {
                     throw new ConfigurationErrorsException(
                         "Unable to infer ServiceStack's <httpHandler.Path/> from the Web.Config\n"
-                        + "Check with http://docs.servicestack.net/create-your-first-webservice to ensure you have configured ServiceStack properly.\n"
+                        + "Check with https://docs.servicestack.net/create-your-first-webservice to ensure you have configured ServiceStack properly.\n"
                         + "Otherwise you can explicitly set your httpHandler.Path by setting: EndpointHostConfig.ServiceStackPath");
                 }
             }
@@ -116,8 +116,7 @@ namespace ServiceStack.Platforms
                 return;
 
             //standard config
-            var handlersSection = webConfig.GetSection("system.web/httpHandlers") as HttpHandlersSection;
-            if (handlersSection != null)
+            if (webConfig.GetSection("system.web/httpHandlers") is HttpHandlersSection handlersSection)
             {
                 for (var i = 0; i < handlersSection.Handlers.Count; i++)
                 {

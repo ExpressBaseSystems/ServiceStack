@@ -1,4 +1,6 @@
-﻿namespace ServiceStack
+﻿using System;
+
+namespace ServiceStack
 {
     /// <summary>
     /// Callback for Plugins to register necessary handlers with ServiceStack
@@ -13,7 +15,7 @@
     /// </summary>
     public interface IPreInitPlugin
     {
-        void Configure(IAppHost appHost);
+        void BeforePluginsLoaded(IAppHost appHost);
     }
 
     /// <summary>
@@ -32,9 +34,14 @@
         void Register(IAppHost appHost, AuthFeature feature);
     }
 
-    public interface IProtoBufPlugin { }        //Marker for ProtoBuf plugin
     public interface IMsgPackPlugin { }         //Marker for MsgPack plugin
     public interface IWirePlugin { }            //Marker for Wire plugin
     public interface INetSerializerPlugin { }   //Marker for NetSerialize plugin
     public interface IRazorPlugin { }           //Marker for MVC Razor plugin
+
+    //Marker for ProtoBuf plugin
+    public interface IProtoBufPlugin
+    {
+        string GetProto(Type type);
+    }        
 }

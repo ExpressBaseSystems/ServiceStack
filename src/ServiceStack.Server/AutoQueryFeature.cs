@@ -12,12 +12,9 @@ using Funq;
 using ServiceStack.MiniProfiler;
 using ServiceStack.Web;
 using ServiceStack.Data;
+using ServiceStack.Extensions;
 using ServiceStack.OrmLite;
 using ServiceStack.Text;
-
-#if NETSTANDARD2_0
-using Microsoft.Extensions.Primitives;
-#endif
 
 namespace ServiceStack
 {
@@ -46,6 +43,7 @@ namespace ServiceStack
         public bool OrderByPrimaryKeyOnPagedQuery { get; set; }
         public string UseNamedConnection { get; set; }
         public Type AutoQueryServiceBaseType { get; set; }
+        public QueryFilterDelegate GlobalQueryFilter { get; set; }
         public Dictionary<Type, QueryFilterDelegate> QueryFilters { get; set; }
         public List<Action<QueryDbFilterContext>> ResponseFilters { get; set; }
         public Action<Type, TypeBuilder, MethodBuilder, ILGenerator> GenerateServiceFilter { get; set; }
@@ -161,6 +159,7 @@ namespace ServiceStack
                     EnableUntypedQueries = EnableUntypedQueries,
                     EnableSqlFilters = EnableRawSqlFilters,
                     OrderByPrimaryKeyOnLimitQuery = OrderByPrimaryKeyOnPagedQuery,
+                    GlobalQueryFilter = GlobalQueryFilter,
                     QueryFilters = QueryFilters,
                     ResponseFilters = ResponseFilters,
                     StartsWithConventions = StartsWithConventions,
@@ -196,19 +195,19 @@ namespace ServiceStack
                 }
             }
 
-            var misingRequestTypes = scannedTypes
+            var missingRequestTypes = scannedTypes
                 .Where(x => x.HasInterface(typeof(IQueryDb)))
                 .Where(x => !appHost.Metadata.OperationsMap.ContainsKey(x))
                 .ToList();
 
-            if (misingRequestTypes.Count == 0)
+            if (missingRequestTypes.Count == 0)
                 return;
 
-            var serviceType = GenerateMissingServices(misingRequestTypes);
+            var serviceType = GenerateMissingServices(missingRequestTypes);
             appHost.RegisterService(serviceType);
         }
 
-        Type GenerateMissingServices(IEnumerable<Type> misingRequestTypes)
+        Type GenerateMissingServices(IEnumerable<Type> missingRequestTypes)
         {
             var assemblyName = new AssemblyName { Name = "tmpAssembly" };
             var typeBuilder =
@@ -218,7 +217,7 @@ namespace ServiceStack
                     TypeAttributes.Public | TypeAttributes.Class,
                     AutoQueryServiceBaseType);
 
-            foreach (var requestType in misingRequestTypes)
+            foreach (var requestType in missingRequestTypes)
             {
                 var genericDef = requestType.GetTypeWithGenericTypeDefinitionOf(typeof(IQueryDb<,>));
                 var hasExplicitInto = genericDef != null;
@@ -284,15 +283,15 @@ namespace ServiceStack
             var aggregateCommands = new List<Command>();
             foreach (var cmd in commands)
             {
-                if (!SqlAggregateFunctions.Contains(cmd.Name.ToString()))
+                if (!SqlAggregateFunctions.Contains(cmd.Name))
                     continue;
 
                 aggregateCommands.Add(cmd);
 
                 if (cmd.Args.Count == 0)
-                    cmd.Args.Add("*".ToStringSegment());
+                    cmd.Args.Add("*".AsMemory());
 
-                cmd.Original = cmd.ToStringSegment();
+                cmd.Original = cmd.AsMemory();
 
                 var hasAlias = !cmd.Suffix.IsNullOrWhiteSpace();
 
@@ -303,9 +302,9 @@ namespace ServiceStack
                     string modifier = "";
                     if (arg.StartsWith("DISTINCT ", StringComparison.OrdinalIgnoreCase))
                     {
-                        var argParts = arg.SplitOnFirst(' ');
-                        modifier = argParts[0] + " ";
-                        arg = argParts[1];
+                        arg.SplitOnFirst(' ', out var first, out var last);
+                        modifier = first + " ";
+                        arg = last;
                     }
 
                     var fieldRef = q.FirstMatchingField(arg.ToString());
@@ -316,15 +315,15 @@ namespace ServiceStack
                         var needsRewrite = !fieldName.EqualsIgnoreCase(q.DialectProvider.NamingStrategy.GetColumnName(fieldName)); 
                         if (fieldRef.Item1 != q.ModelDef || fieldRef.Item2.Alias != null || needsRewrite || hasAlias)
                         {
-                            cmd.Args[i] = (modifier + q.DialectProvider.GetQuotedColumnName(fieldRef.Item1, fieldRef.Item2)).ToStringSegment();
+                            cmd.Args[i] = (modifier + q.DialectProvider.GetQuotedColumnName(fieldRef.Item1, fieldRef.Item2)).AsMemory();
                         }
                     }
                     else
                     {
                         double d;
-                        if (!arg.Equals("*") && !double.TryParse(arg.ToString(), out d))
+                        if (!arg.EqualsOrdinal("*") && !double.TryParse(arg.ToString(), out d))
                         {
-                            cmd.Args[i] = "{0}".SqlFmt(arg).ToStringSegment();
+                            cmd.Args[i] = "{0}".SqlFmt(arg).AsMemory();
                         }
                     }
                 }
@@ -335,11 +334,11 @@ namespace ServiceStack
                     if (alias.StartsWith("as ", StringComparison.OrdinalIgnoreCase))
                         alias = alias.Substring("as ".Length);
 
-                    cmd.Suffix = (" " + alias.SafeVarName()).ToStringSegment();
+                    cmd.Suffix = (" " + alias.SafeVarName()).AsMemory();
                 }
                 else
                 {
-                    cmd.Suffix = (" " + q.DialectProvider.GetQuotedName(cmd.Original.ToString())).ToStringSegment();
+                    cmd.Suffix = (" " + q.DialectProvider.GetQuotedName(cmd.Original.ToString())).AsMemory();
                 }
             }
 
@@ -434,6 +433,7 @@ namespace ServiceStack
 
         public string UseNamedConnection { get; set; }
         public virtual IDbConnection Db { get; set; }
+        public QueryFilterDelegate GlobalQueryFilter { get; set; }
         public Dictionary<Type, QueryFilterDelegate> QueryFilters { get; set; }
         public List<Action<QueryDbFilterContext>> ResponseFilters { get; set; }
 
@@ -465,8 +465,8 @@ namespace ServiceStack
 
         public ITypedQuery GetTypedQuery(Type dtoType, Type fromType)
         {
-            ITypedQuery defaultValue;
-            if (TypedQueries.TryGetValue(dtoType, out defaultValue)) return defaultValue;
+            if (TypedQueries.TryGetValue(dtoType, out var defaultValue)) 
+                return defaultValue;
 
             var genericType = typeof(TypedQuery<,>).MakeGenericType(dtoType, fromType);
             defaultValue = genericType.CreateInstance<ITypedQuery>();
@@ -487,6 +487,8 @@ namespace ServiceStack
 
         public SqlExpression<From> Filter<From>(ISqlExpression q, IQueryDb dto, IRequest req)
         {
+            GlobalQueryFilter?.Invoke(q, dto, req);
+
             if (QueryFilters == null)
                 return (SqlExpression<From>)q;
 
@@ -506,6 +508,8 @@ namespace ServiceStack
 
         public ISqlExpression Filter(ISqlExpression q, IQueryDb dto, IRequest req)
         {
+            GlobalQueryFilter?.Invoke(q, dto, req);
+
             if (QueryFilters == null)
                 return q;
 
@@ -541,17 +545,17 @@ namespace ServiceStack
             var totalCommand = commands.FirstOrDefault(x => x.Name.EqualsIgnoreCase("Total"));
             if (totalCommand != null)
             {
-                totalCommand.Name = "COUNT".ToStringSegment();
+                totalCommand.Name = "COUNT";
             }
 
             var totalRequested = commands.Any(x =>
                 x.Name.EqualsIgnoreCase("COUNT") &&
-                (x.Args.Count == 0 || x.Args.Count == 1 && x.Args[0].Equals("*")));
+                (x.Args.Count == 0 || x.Args.Count == 1 && x.Args[0].EqualsOrdinal("*")));
 
             if (IncludeTotal || totalRequested)
             {
                 if (!totalRequested)
-                    commands.Add(new Command { Name = "COUNT".ToStringSegment(), Args = { "*".ToStringSegment() } });
+                    commands.Add(new Command { Name = "COUNT", Args = { "*".AsMemory() } });
 
                 foreach (var responseFilter in ResponseFilters)
                 {
@@ -1041,7 +1045,7 @@ namespace ServiceStack
                 if (aliases.TryGetValue(name, out var alias))
                     match = GetQueryMatch(q, alias, options);
 
-                if (match == null && JsConfig.EmitLowercaseUnderscoreNames && name.Contains("_"))
+                if (match == null && JsConfig.TextCase == TextCase.SnakeCase && name.Contains("_"))
                     match = GetQueryMatch(q, name.Replace("_", ""), options);
             }
 

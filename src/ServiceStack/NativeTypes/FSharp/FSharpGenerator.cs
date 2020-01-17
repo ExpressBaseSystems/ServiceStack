@@ -20,16 +20,28 @@ namespace ServiceStack.NativeTypes.FSharp
             feature = HostContext.GetPlugin<NativeTypesFeature>();
         }
 
+        public static Action<StringBuilderWrapper, MetadataType> PreTypeFilter { get; set; }
+        public static Action<StringBuilderWrapper, MetadataType> PostTypeFilter { get; set; }
+
         public static Dictionary<string, string> TypeAliases = new Dictionary<string, string> 
         {
         };
 
+        public static TypeFilterDelegate TypeFilter { get; set; }
+
         public static Func<List<MetadataType>, List<MetadataType>> FilterTypes = DefaultFilterTypes;
 
-        public static List<MetadataType> DefaultFilterTypes(List<MetadataType> types)
-        {
-            return types.OrderTypesByDeps();
-        }
+        public static List<MetadataType> DefaultFilterTypes(List<MetadataType> types) => types.OrderTypesByDeps();
+
+        /// <summary>
+        /// Add Code to top of generated code
+        /// </summary>
+        public static AddCodeDelegate InsertCodeFilter { get; set; }
+
+        /// <summary>
+        /// Add Code to bottom of generated code
+        /// </summary>
+        public static AddCodeDelegate AddCodeFilter { get; set; }
 
         public string GetCode(MetadataTypes metadata, IRequest request)
         {
@@ -57,7 +69,7 @@ namespace ServiceStack.NativeTypes.FSharp
             var sb = new StringBuilderWrapper(sbInner);
             sb.AppendLine("(* Options:");
             sb.AppendLine("Date: {0}".Fmt(DateTime.Now.ToString("s").Replace("T", " ")));
-            sb.AppendLine("Version: {0}".Fmt(Env.ServiceStackVersion));
+            sb.AppendLine("Version: {0}".Fmt(Env.VersionString));
             sb.AppendLine("Tip: {0}".Fmt(HelpMessages.NativeTypesDtoOptionsTip.Fmt("//")));
             sb.AppendLine("BaseUrl: {0}".Fmt(Config.BaseUrl));
             sb.AppendLine();
@@ -105,6 +117,10 @@ namespace ServiceStack.NativeTypes.FSharp
             }
             if (Config.AddGeneratedCodeAttributes)
                 sb.AppendLine("open System.CodeDom.Compiler");
+
+            var insertCode = InsertCodeFilter?.Invoke(allTypes, Config);
+            if (insertCode != null)
+                sb.AppendLine(insertCode);
 
             foreach (var type in orderedTypes)
             {
@@ -167,6 +183,10 @@ namespace ServiceStack.NativeTypes.FSharp
                 }
             }
 
+            var addCode = AddCodeFilter?.Invoke(allTypes, Config);
+            if (addCode != null)
+                sb.AppendLine(addCode);
+
             sb.AppendLine();
 
             return StringBuilderCache.ReturnAndFree(sbInner);
@@ -189,6 +209,8 @@ namespace ServiceStack.NativeTypes.FSharp
             {
                 sb.AppendLine("[<GeneratedCode(\"AddServiceStackReference\", \"{0}\")>]".Fmt(Env.VersionString));
             }
+
+            PreTypeFilter?.Invoke(sb, type);
 
             if (type.IsEnum.GetValueOrDefault())
             {
@@ -253,6 +275,8 @@ namespace ServiceStack.NativeTypes.FSharp
 
                 sb = sb.UnIndent();
             }
+            
+            PostTypeFilter?.Invoke(sb, type);
 
             sb = sb.UnIndent();
             return lastNS;
@@ -372,7 +396,7 @@ namespace ServiceStack.NativeTypes.FSharp
             if (value == null)
                 return "null";
             if (alias == "string" || type == "String")
-                return value.QuotedSafeValue();
+                return value.ToEscapedString();
 
             if (value.StartsWith("typeof("))
             {
@@ -391,6 +415,10 @@ namespace ServiceStack.NativeTypes.FSharp
 
         public string Type(string type, string[] genericArgs)
         {
+            var useType = TypeFilter?.Invoke(type, genericArgs);
+            if (useType != null)
+                return useType;
+
             if (genericArgs != null)
             {
                 var parts = type.Split('`');

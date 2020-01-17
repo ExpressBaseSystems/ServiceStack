@@ -3,12 +3,14 @@ using System.Globalization;
 using System.IO;
 using System.Runtime.Serialization;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Web.UI;
 using Funq;
 using NUnit.Framework;
 using ServiceStack.Common.Tests;
 using ServiceStack.Metadata;
 using ServiceStack.Testing;
+using ServiceStack.Text;
 using ServiceStack.WebHost.Endpoints.Tests.Support.Operations;
 
 namespace ServiceStack.WebHost.Endpoints.Tests
@@ -67,25 +69,28 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         }
 
         [Test]
-        public void OperationControl_render_creates_link_back_to_main_page_using_WebHostUrl_when_set()
+        public async Task OperationControl_render_creates_link_back_to_main_page_using_WebHostUrl_when_set()
         {
             appHost.Config.WebHostUrl = "https://host.example.com/_api";
 
-            var stringWriter = new StringWriter();
-            operationControl.Render(new HtmlTextWriter(stringWriter));
-
-            string html = stringWriter.ToString();
-            Assert.IsTrue(html.Contains("<a href=\"https://host.example.com/_api/metadata\">&lt;back to all web services</a>"));
+            using (var ms = MemoryStreamFactory.GetStream())
+            {
+                await operationControl.RenderAsync(ms);
+    
+                string html = ms.ReadToEnd();
+                Assert.IsTrue(html.Contains("<a href=\"https://host.example.com/_api/metadata\">&lt;back to all web services</a>"));
+            }
         }
 
         [Test]
-        public void OperationControl_render_creates_link_back_to_main_page_using_relative_uri_when_WebHostUrl_not_set()
+        public async Task OperationControl_render_creates_link_back_to_main_page_using_relative_uri_when_WebHostUrl_not_set()
         {
-            var stringWriter = new StringWriter();
-            operationControl.Render(new HtmlTextWriter(stringWriter));
-
-            string html = stringWriter.ToString();
-            Assert.That(html, Does.Contain("<a href=\"http://localhost/metadata\">&lt;back to all web services</a>"));
+            using (var ms = MemoryStreamFactory.GetStream())
+            {
+                await operationControl.RenderAsync(ms);
+                string html = ms.ReadToEnd();
+                Assert.That(html, Does.Contain("<a href=\"http://localhost/metadata\">&lt;back to all web services</a>"));
+            }
         }
 
         [Test]

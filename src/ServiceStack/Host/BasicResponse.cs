@@ -6,10 +6,10 @@ using ServiceStack.Web;
 
 namespace ServiceStack.Host
 {
-    public class BasicResponse : IResponse
+    public class BasicResponse : IResponse, IHasHeaders
     {
         private readonly BasicRequest requestContext;
-        private Dictionary<string, string> Headers { get; }
+        public Dictionary<string, string> Headers { get; }
 
         public BasicResponse(BasicRequest requestContext)
         {
@@ -44,8 +44,7 @@ namespace ServiceStack.Host
 
         public string GetHeader(string name)
         {
-            string value;
-            this.Headers.TryGetValue(name, out value);
+            this.Headers.TryGetValue(name, out var value);
             return value;
         }
 
@@ -69,9 +68,16 @@ namespace ServiceStack.Host
 
         public void Close()
         {
+            if (IsClosed) return;
             IsClosed = true;
             if (ms != null && ms.CanWrite)
                 ms.Dispose();
+        }
+
+        public Task CloseAsync(CancellationToken token = default(CancellationToken))
+        {
+            Close();
+            return TypeConstants.EmptyTask;
         }
 
         public void End()

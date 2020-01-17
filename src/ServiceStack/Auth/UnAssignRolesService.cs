@@ -9,25 +9,23 @@ namespace ServiceStack.Auth
     {
         public object Post(UnAssignRoles request)
         {
-            RequiredRoleAttribute.AssertRequiredRoles(Request, RoleNames.Admin);
+            if (!Request.IsInProcessRequest())
+                RequiredRoleAttribute.AssertRequiredRoles(Request, RoleNames.Admin);
 
-            request.UserName.ThrowIfNullOrEmpty();
+            if (string.IsNullOrEmpty(request.UserName))
+                throw new ArgumentNullException(nameof(request.UserName));
 
-            var authRepo = HostContext.AppHost.GetAuthRepository(base.Request);
-            using (authRepo as IDisposable)
+            var userAuth = AuthRepository.GetUserAuthByUserName(request.UserName);
+            if (userAuth == null)
+                throw HttpError.NotFound(request.UserName);
+
+            AuthRepository.UnAssignRoles(userAuth, request.Roles, request.Permissions);
+
+            return new UnAssignRolesResponse
             {
-                var userAuth = authRepo.GetUserAuthByUserName(request.UserName);
-                if (userAuth == null)
-                    throw HttpError.NotFound(request.UserName);
-
-                authRepo.UnAssignRoles(userAuth, request.Roles, request.Permissions);
-
-                return new UnAssignRolesResponse
-                {
-                    AllRoles = authRepo.GetRoles(userAuth).ToList(),
-                    AllPermissions = authRepo.GetPermissions(userAuth).ToList(),
-                };
-            }
+                AllRoles = AuthRepository.GetRoles(userAuth).ToList(),
+                AllPermissions = AuthRepository.GetPermissions(userAuth).ToList(),
+            };
         }
     }
 }

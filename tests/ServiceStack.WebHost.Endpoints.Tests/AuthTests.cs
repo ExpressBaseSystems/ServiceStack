@@ -60,7 +60,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 FileName = file.FileName,
                 ContentLength = file.ContentLength,
                 ContentType = file.ContentType,
-                Contents = new StreamReader(file.InputStream).ReadToEnd(),
+                Contents = file.InputStream.ReadToEnd(),
                 CustomerId = request.CustomerId,
                 CustomerName = request.CustomerName
             };
@@ -187,6 +187,12 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         public int? By { get; set; }
     }
 
+    [Route("/unsecure")]
+    public class Unsecure : IReturn<Unsecure>
+    {
+        public string Name { get; set; }
+    }
+
     public class CustomUserSessionService : Service
     {
         public object Any(IncrSession request)
@@ -196,6 +202,8 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             Request.SaveSession(session);
             return session;
         }
+
+        public object Any(Unsecure request) => request;
     }
 
     public class CustomAuthProvider : AuthProvider
@@ -317,7 +325,8 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             Plugins.Add(new AuthFeature(() => new CustomUserSession(),
                 GetAuthProviders(), "~/" + AuthTests.LoginUrl)
             {
-                RegisterPlugins = { new WebSudoFeature() }
+                AllowGetAuthenticateRequests = req => true,
+                RegisterPlugins = { new WebSudoFeature() },
             });
 
             container.Register(new MemoryCacheClient());
@@ -497,7 +506,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             var client = GetClientWithUserPassword();
             var uploadFile = new FileInfo("~/TestExistingDir/upload.html".MapProjectPlatformPath());
 
-            var expectedContents = new StreamReader(uploadFile.OpenRead()).ReadToEnd();
+            var expectedContents = uploadFile.OpenRead().ReadToEnd();
             var response = client.PostFile<FileUploadResponse>(ListeningOn + "/securedfileupload", uploadFile, MimeTypes.GetMimeType(uploadFile.Name));
             Assert.That(response.FileName, Is.EqualTo(uploadFile.Name));
             Assert.That(response.ContentLength, Is.EqualTo(uploadFile.Length));
@@ -511,7 +520,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             var request = new SecuredFileUpload { CustomerId = 123, CustomerName = "Foo" };
             var uploadFile = new FileInfo("~/TestExistingDir/upload.html".MapProjectPlatformPath());
 
-            var expectedContents = new StreamReader(uploadFile.OpenRead()).ReadToEnd();
+            var expectedContents = uploadFile.OpenRead().ReadToEnd();
             var response = client.PostFileWithRequest<FileUploadResponse>(ListeningOn + "/securedfileupload", uploadFile, request);
             Assert.That(response.FileName, Is.EqualTo(uploadFile.Name));
             Assert.That(response.ContentLength, Is.EqualTo(uploadFile.Length));
@@ -652,7 +661,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         }
 
         [Test]
-        public async Task Does_work_with_CredentailsAuth_Async()
+        public async Task Does_work_with_CredentialsAuth_Async()
         {
             var client = GetClient();
 
@@ -958,15 +967,18 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             try
             {
                 client.Send<SecureResponse>(request);
-            } catch (WebServiceException ex)
-            {
+            } 
 #if NETCORE
+            catch (WebServiceException ex)
+            {
                 //AllowAutoRedirect=false is not implemented in .NET Core and throws NotFound exception
                 if (ex.StatusCode == (int)HttpStatusCode.Found)
                     return;
-#endif
                 throw;
-            } 
+            }
+#else
+            catch (WebServiceException) {}
+#endif
 
             var locationUri = new Uri(lastResponseLocationHeader);
             var loginPath = "/".CombineWith(VirtualDirectory).CombineWith(LoginUrl);
@@ -988,19 +1000,21 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             try
             {
                 client.Send<SecureResponse>(request);
-            } catch (WebServiceException ex)
-            {
+            }
 #if NETCORE
+            catch (WebServiceException ex)
+            {
                 //AllowAutoRedirect=false is not implemented in .NET Core and throws NotFound exception
                 if (ex.StatusCode == (int)HttpStatusCode.Found)
                     return;
-#endif
-                throw;
             }
+#else
+            catch (WebServiceException) {}
+#endif
 
             var locationUri = new Uri(lastResponseLocationHeader);
             var queryString = HttpUtility.ParseQueryString(locationUri.Query);
-            var redirectQueryString = queryString["redirect"];
+            var redirectQueryString = queryString[Keywords.Redirect];
             var redirectUri = new Uri(redirectQueryString);
 
             // Should contain the url attempted to access before the redirect to the login page.
@@ -1029,19 +1043,21 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             try
             {
                 client.Get(request);
-            } catch (WebServiceException ex)
-            {
+            }
 #if NETCORE
+            catch (WebServiceException ex)
+            {
                 //AllowAutoRedirect=false is not implemented in .NET Core and throws NotFound exception
                 if (ex.StatusCode == (int)HttpStatusCode.Found)
                     return;
-#endif
-                throw;
             }
+#else
+            catch (WebServiceException) {}
+#endif
 
             var locationUri = new Uri(lastResponseLocationHeader);
             var locationUriQueryString = HttpUtility.ParseQueryString(locationUri.Query);
-            var redirectQueryItem = locationUriQueryString["redirect"];
+            var redirectQueryItem = locationUriQueryString[Keywords.Redirect];
             var redirectUri = new Uri(redirectQueryItem);
 
             // Should contain the url attempted to access before the redirect to the login page,
@@ -1071,15 +1087,17 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                     Password = PasswordForSessionRedirect,
                     RememberMe = true,
                 });
-            } catch (WebServiceException ex)
-            {
-#if NETCORE
-                //AllowAutoRedirect=false is not implemented in .NET Core and throws NotFound exception
-                if (ex.StatusCode == (int)HttpStatusCode.Redirect)
-                    return;
-#endif
-                throw;
             }
+#if NETCORE
+            catch (WebServiceException ex)
+            {
+                //AllowAutoRedirect=false is not implemented in .NET Core and throws NotFound exception
+                if (ex.StatusCode == (int)HttpStatusCode.Found)
+                    return;
+            }
+#else
+            catch (WebServiceException) {}
+#endif
 
             Assert.That(lastResponseLocationHeader, Is.EqualTo(SessionRedirectUrl));
         }

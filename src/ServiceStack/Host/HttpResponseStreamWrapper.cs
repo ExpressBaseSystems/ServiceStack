@@ -7,7 +7,7 @@ using ServiceStack.Web;
 
 namespace ServiceStack.Host
 {
-    public class HttpResponseStreamWrapper : IHttpResponse
+    public class HttpResponseStreamWrapper : IHttpResponse, IHasHeaders
     {
         public HttpResponseStreamWrapper(Stream stream, IRequest request)
         {
@@ -41,8 +41,7 @@ namespace ServiceStack.Host
 
         public string GetHeader(string name)
         {
-            string value;
-            this.Headers.TryGetValue(name, out value);
+            this.Headers.TryGetValue(name, out var value);
             return value;
         }
 
@@ -61,6 +60,12 @@ namespace ServiceStack.Host
         {
             if (KeepOpen) return;
             ForceClose();
+        }
+
+        public Task CloseAsync(CancellationToken token = default(CancellationToken))
+        {
+            Close();
+            return TypeConstants.EmptyTask;
         }
 
         public void ForceClose()

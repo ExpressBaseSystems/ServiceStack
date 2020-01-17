@@ -18,7 +18,7 @@ namespace ServiceStack
      * http://msdn.microsoft.com/en-us/library/86wf6409(VS.71).aspx
      */
 
-    public partial class AsyncServiceClient : IHasSessionId, IHasVersion
+    public partial class AsyncServiceClient : IHasSessionId, IHasBearerToken, IHasVersion
     {
         private static readonly ILog Log = LogManager.GetLogger(typeof(AsyncServiceClient));
         private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
@@ -47,6 +47,8 @@ namespace ServiceStack
         public string RefreshToken { get; set; }
 
         public string RefreshTokenUri { get; set; }
+        
+        public bool UseTokenCookie { get; set; }
 
         public static int BufferSize = 8192;
 
@@ -91,6 +93,8 @@ namespace ServiceStack
         public string BaseUri { get; set; }
         public bool DisableAutoCompression { get; set; }
 
+        public string RequestCompressionType { get; set; }
+
         public string UserName { get; set; }
 
         public string Password { get; set; }
@@ -100,8 +104,6 @@ namespace ServiceStack
             this.UserName = userName;
             this.Password = password;
         }
-
-        public string BearerToken { get; set; }
 
         public TimeSpan? Timeout { get; set; }
 
@@ -121,9 +123,13 @@ namespace ServiceStack
 
         public bool ShareCookiesWithBrowser { get; set; }
 
+        public IWebProxy Proxy { get; set; }
+
         public int Version { get; set; }
 
         public string SessionId { get; set; }
+
+        public string BearerToken { get; set; }
 
         public static bool DisableTimer { get; set; }
 
@@ -158,6 +164,7 @@ namespace ServiceStack
             }
 
             var webReq = this.CreateHttpWebRequest(requestUri);
+            if (webReq != null && Proxy != null) webReq.Proxy = Proxy;
 
             var timedOut = false;
             ITimer timer = null;
@@ -213,6 +220,11 @@ namespace ServiceStack
             else if (this.AlwaysSendBasicAuthHeader)
                 webReq.AddBasicAuth(this.UserName, this.Password);
 
+            if (!DisableAutoCompression)
+            {
+                PclExport.Instance.AddCompression(webReq);
+            }
+
             ApplyWebRequestFilters(webReq);
 
             try
@@ -220,6 +232,9 @@ namespace ServiceStack
                 if (HttpUtils.HasRequestBody(webReq.Method))
                 {
                     webReq.ContentType = ContentType;
+
+                   if (RequestCompressionType != null)
+                        webReq.Headers[HttpHeaders.ContentEncoding] = RequestCompressionType;
 
                     using (var requestStream = await webReq.GetRequestStreamAsync().ConfigureAwait(false))
                     {
@@ -251,7 +266,7 @@ namespace ServiceStack
                     if (returningWebResponse)
                         return Complete((T) (object) webRes);
 
-                    var responseStream = GetResponseStream(webRes);
+                    var responseStream = webRes.ResponseStream();
 
                     var responseBodyLength = webRes.ContentLength;
                     var bufferRead = new byte[BufferSize];
@@ -276,25 +291,22 @@ namespace ServiceStack
                         }
                         else
                         {
-                            var reader = ms;
+                            var stream = ms;
                             try
                             {
                                 if (typeof(T) == typeof(string))
                                 {
-                                    using (var sr = new StreamReader(reader))
-                                    {
-                                        return Complete((T) (object) sr.ReadToEnd());
-                                    }
+                                    return Complete((T) (object) stream.ReadToEnd());
                                 }
                                 else if (typeof(T) == typeof(byte[]))
-                                    return Complete((T) (object) reader.ToArray());
+                                    return Complete((T) (object) stream.ToArray());
                                 else
-                                    return Complete((T) this.StreamDeserializer(typeof(T), reader));
+                                    return Complete((T) this.StreamDeserializer(typeof(T), stream));
                             }
                             finally
                             {
-                                if (reader.CanRead)
-                                    reader.Dispose(); // Not yet disposed, but could've been.
+                                if (stream.CanRead)
+                                    stream.Dispose(); // Not yet disposed, but could've been.
                             }
                         }
                     }
@@ -326,15 +338,20 @@ namespace ServiceStack
                     {
                         if (RefreshToken != null)
                         {
-                            var refreshRequest = new GetAccessToken {RefreshToken = RefreshToken};
-                            var uri = this.RefreshTokenUri ??
-                                      this.BaseUri.CombineWith(refreshRequest.ToPostUrl());
+                            var refreshRequest = new GetAccessToken {
+                                RefreshToken = RefreshToken,
+                                UseTokenCookie = UseTokenCookie,
+                            };                        
+                            var uri = this.RefreshTokenUri ?? this.BaseUri.CombineWith(refreshRequest.ToPostUrl());
 
                             GetAccessTokenResponse tokenResponse;
                             try
                             {
-                                tokenResponse = uri.PostJsonToUrl(refreshRequest)
-                                    .FromJson<GetAccessTokenResponse>();
+                                tokenResponse = uri.PostJsonToUrl(refreshRequest, requestFilter: req => {
+                                    if (UseTokenCookie) {
+                                        req.CookieContainer = CookieContainer;
+                                    }
+                                }).FromJson<GetAccessTokenResponse>();
                             }
                             catch (WebException refreshEx)
                             {
@@ -349,18 +366,30 @@ namespace ServiceStack
                             }
 
                             var accessToken = tokenResponse?.AccessToken;
-                            if (string.IsNullOrEmpty(accessToken))
-                                throw new RefreshTokenException("Could not retrieve new AccessToken from: " + uri);
-
                             var refreshClient = webReq = (HttpWebRequest) WebRequest.Create(requestUri);
-                            if (this.CookieContainer.GetTokenCookie(BaseUri) != null)
+                            var tokenCookie = this.CookieContainer.GetTokenCookie(BaseUri);
+
+                            if (UseTokenCookie)
                             {
-                                this.CookieContainer.SetTokenCookie(accessToken, BaseUri);
-                                refreshClient.CookieContainer.SetTokenCookie(BaseUri, accessToken);
+                                if (tokenCookie == null)
+                                    throw new RefreshTokenException("Could not retrieve new AccessToken Cooke from: " + uri);
+                            
+                                refreshClient.CookieContainer.SetTokenCookie(BaseUri, tokenCookie);
                             }
                             else
                             {
-                                refreshClient.AddBearerToken(this.BearerToken = accessToken);
+                                if (string.IsNullOrEmpty(accessToken))
+                                    throw new RefreshTokenException("Could not retrieve new AccessToken from: " + uri);
+
+                                if (tokenCookie != null)
+                                {
+                                    this.CookieContainer.SetTokenCookie(accessToken, BaseUri);
+                                    refreshClient.CookieContainer.SetTokenCookie(BaseUri, accessToken);
+                                }
+                                else
+                                {
+                                    refreshClient.AddBearerToken(this.BearerToken = accessToken);
+                                }
                             }
 
                             return await SendWebRequestAsync<T>(httpMethod, absoluteUrl, request, token, recall: true).ConfigureAwait(false);
@@ -403,15 +432,6 @@ namespace ServiceStack
             }
         }
 
-        private static Stream GetResponseStream(WebResponse webRes)
-        {
-#if NETSTANDARD2_0
-            return webRes.GetResponseStream().Decompress(webRes.Headers[HttpHeaders.ContentEncoding]);
-#else
-            return webRes.GetResponseStream();
-#endif
-        }
-
         private Exception HandleResponseError<TResponse>(Exception exception, string url, object request)
         {
             var webEx = exception as WebException;
@@ -434,7 +454,7 @@ namespace ServiceStack
 
                 try
                 {
-                    using (var stream = errorResponse.GetResponseStream())
+                    using (var stream = errorResponse.ResponseStream())
                     {
                         var bytes = stream.ReadFully();
                         serviceEx.ResponseBody = bytes.FromUtf8Bytes();

@@ -115,6 +115,16 @@ namespace ServiceStack
             httpRes.EndRequest();
         }
 
+        public static IResponse AllowSyncIO(this IResponse res)
+        {
+#if NETSTANDARD
+                // AllowSynchronousIO for sync SSE notifications https://github.com/aspnet/AspNetCore/issues/7644 
+                var feature = ((ServiceStack.Host.NetCore.NetCoreResponse)res).HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpBodyControlFeature>();
+                feature.AllowSynchronousIO = true;
+#endif
+            return res;
+        }
+
         public static void Redirect(this IResponse httpRes, string url)
         {
             httpRes.AddHeader(HttpHeaders.Location, url);
@@ -176,9 +186,9 @@ namespace ServiceStack
         /// <summary>
         /// Sets a persistent cookie which expires after the given time
         /// </summary>
-        public static void SetCookie(this IResponse response, string cookieName, string cookieValue, TimeSpan expiresIn)
+        public static void SetCookie(this IResponse response, string cookieName, string cookieValue, TimeSpan expiresIn, string path = "/")
         {
-            response.SetCookie(new Cookie(cookieName, cookieValue)
+            response.SetCookie(new Cookie(cookieName, cookieValue, path)
             {
                 Expires = DateTime.UtcNow + expiresIn
             });
@@ -255,7 +265,7 @@ namespace ServiceStack
 #if !NETSTANDARD2_0
             if (response is Host.AspNet.AspNetResponse aspRes)
             {
-                aspRes.Write(contents);
+                aspRes.Response.Write(contents);
                 return;
             }
 #endif
@@ -273,7 +283,7 @@ namespace ServiceStack
 
             var bytes = contents.ToUtf8Bytes();
             response.SetContentLength(bytes.Length);
-            response.OutputStream.Write(bytes, 0, bytes.Length);
+            response.AllowSyncIO().OutputStream.Write(bytes, 0, bytes.Length);
         }
 
         public static Task WriteAsync(this IResponse response, string contents)

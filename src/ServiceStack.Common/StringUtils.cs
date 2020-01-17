@@ -6,65 +6,400 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
-using ServiceStack.Templates;
+using ServiceStack.Extensions;
+using ServiceStack.Script;
 using ServiceStack.Text;
-
-#if NETSTANDARD2_0
-using Microsoft.Extensions.Primitives;
-#endif
 
 namespace ServiceStack
 {
-    public class Command : JsExpression
+    public class TextNode
     {
-        public StringSegment Suffix { get; set; }
-
-        public override int IndexOfMethodEnd(StringSegment commandsString, int pos)
+        public TextNode()
         {
-            //finding end of suffix, e.g: 'SUM(*) Total' or 'SUM(*) as Total'
-            var endPos = pos;
-            while (commandsString.Length > endPos && char.IsWhiteSpace(commandsString.GetChar(endPos)))
-                endPos++;
-
-            if (commandsString.Length > endPos && commandsString.IndexOf("as ", endPos) == endPos)
-                endPos += "as ".Length;
-
-            while (commandsString.Length > endPos && char.IsWhiteSpace(commandsString.GetChar(endPos)))
-                endPos++;
-
-            while (commandsString.Length > endPos &&
-                   char.IsLetterOrDigit(commandsString.GetChar(endPos)))
-                endPos++;
-
-            this.Suffix = commandsString.Subsegment(pos, endPos - pos).TrimEnd();
-
-            return endPos;
+            Children = new List<TextNode>();
         }
 
-        public override string ToDebugString() => base.ToDebugString() + Suffix;
+        public string Text { get; set; }
 
-        public override string ToString()
-        {
-            var sb = StringBuilderCacheAlt.Allocate();
-            foreach (var arg in Args)
-            {
-                if (sb.Length > 0)
-                    sb.Append(',');
-                sb.Append(arg);
-            }
-            return $"{Name}({StringBuilderCacheAlt.ReturnAndFree(sb)}){Suffix}";
-        }
+        public List<TextNode> Children { get; set; }
     }
 
     public static class StringUtils
     {
         public static List<Command> ParseCommands(this string commandsString)
         {
-            return commandsString.ToStringSegment().ParseExpression<Command>(',');
+            return commandsString.AsMemory().ParseCommands(',');
+        }
+        
+        public static List<Command> ParseCommands(this ReadOnlyMemory<char> commandsString, 
+            char separator = ',')
+        {
+            var to = new List<Command>();
+            List<ReadOnlyMemory<char>> args = null;
+            var pos = 0;
+
+            if (commandsString.IsNullOrEmpty())
+                return to;
+
+            var inDoubleQuotes = false;
+            var inSingleQuotes = false;
+            var inBackTickQuotes = false;
+            var inPrimeQuotes = false;
+            var inBrackets = false;
+
+            var endBlockPos = commandsString.Length;
+            var cmd = new Command();
+            var segmentStartPos = 0;
+
+            try
+            {
+                for (var i = 0; i < commandsString.Length; i++)
+                {
+                    var c = commandsString.Span[i];
+                    if (c.IsWhiteSpace())
+                        continue;
+
+                    if (inDoubleQuotes)
+                    {
+                        if (c == '"')
+                            inDoubleQuotes = false;
+                        continue;
+                    }
+                    if (inSingleQuotes)
+                    {
+                        if (c == '\'')
+                            inSingleQuotes = false;
+                        continue;
+                    }
+                    if (inBackTickQuotes)
+                    {
+                        if (c == '`')
+                            inBackTickQuotes = false;
+                        continue;
+                    }
+                    if (inPrimeQuotes)
+                    {
+                        if (c == '′')
+                            inPrimeQuotes = false;
+                        continue;
+                    }
+                    switch (c)
+                    {
+                        case '"':
+                            inDoubleQuotes = true;
+                            continue;
+                        case '\'':
+                            inSingleQuotes = true;
+                            continue;
+                        case '`':
+                            inBackTickQuotes = true;
+                            continue;
+                        case '′':
+                            inPrimeQuotes = true;
+                            continue;
+                    }
+
+                    if (c == '(')
+                    {
+                        inBrackets = true;
+                        cmd.Name = commandsString.Slice(pos, i - pos).Trim().ToString();
+                        pos = i + 1;
+
+                        var literal = commandsString.Slice(pos);
+                        var literalRemaining = ParseArguments(literal, out args);
+                        cmd.Args = args;
+                        var endPos = literal.Length - literalRemaining.Length;
+                        
+                        i += endPos;
+                        pos = i + 1;
+                        continue;
+                    }
+                    if (c == ')')
+                    {
+                        inBrackets = false;
+                        pos = i + 1;
+
+                        pos = cmd.IndexOfMethodEnd(commandsString, pos);
+                        continue;
+                    }
+
+                    if (inBrackets && c == ',')
+                    {
+                        var arg = commandsString.Slice(pos, i - pos).Trim();
+                        cmd.Args.Add(arg);
+                        pos = i + 1;
+                    }
+                    else if (c == separator)
+                    {
+                        if (string.IsNullOrEmpty(cmd.Name))
+                            cmd.Name = commandsString.Slice(pos, i - pos).Trim().ToString();
+                        else
+                            cmd.Suffix = commandsString.Slice(pos - cmd.Suffix.Length, i - pos + cmd.Suffix.Length);
+
+                        cmd.Original = commandsString.Slice(segmentStartPos, i - segmentStartPos).Trim();
+
+                        to.Add(cmd);
+                        cmd = new Command();
+                        segmentStartPos = pos = i + 1;
+                    }
+                }
+
+                var remaining = commandsString.Slice(pos, endBlockPos - pos);
+                if (!remaining.Trim().IsNullOrEmpty())
+                {
+                    pos += remaining.Length;
+                    cmd.Name = remaining.Trim().ToString();
+                }
+
+                if (!cmd.Name.IsNullOrEmpty())
+                {
+                    cmd.Original = commandsString.Slice(segmentStartPos, commandsString.Length - segmentStartPos).Trim();
+                    to.Add(cmd);
+                }
+            }
+            catch (Exception e)
+            {
+                throw new Exception($"Illegal syntax near '{commandsString.SafeSlice(pos - 10, 50)}...'", e);
+            }
+
+            return to;
+        }
+        
+        // ( {args} , {args} )
+        //   ^
+        public static ReadOnlyMemory<char> ParseArguments(ReadOnlyMemory<char> argsString, out List<ReadOnlyMemory<char>> args)
+        {
+            var to = new List<ReadOnlyMemory<char>>();
+
+            var inDoubleQuotes = false;
+            var inSingleQuotes = false;
+            var inBackTickQuotes = false;
+            var inPrimeQuotes = false;
+            var inBrackets = 0;
+            var inParens = 0;
+            var inBraces = 0;
+            var lastPos = 0;
+
+            for (var i = 0; i < argsString.Length; i++)
+            {
+                var c = argsString.Span[i];
+                if (inDoubleQuotes)
+                {
+                    if (c == '"')
+                        inDoubleQuotes = false;
+                    continue;
+                }
+                if (inSingleQuotes)
+                {
+                    if (c == '\'')
+                        inSingleQuotes = false;
+                    continue;
+                }
+                if (inBackTickQuotes)
+                {
+                    if (c == '`')
+                        inBackTickQuotes = false;
+                    continue;
+                }
+                if (inPrimeQuotes)
+                {
+                    if (c == '′')
+                        inPrimeQuotes = false;
+                    continue;
+                }
+                if (inBrackets > 0)
+                {
+                    if (c == '[')
+                        ++inBrackets;
+                    else if (c == ']')
+                        --inBrackets;
+                    continue;
+                }
+                if (inBraces > 0)
+                {
+                    if (c == '{')
+                        ++inBraces;
+                    else if (c == '}')
+                        --inBraces;
+                    continue;
+                }
+                if (inParens > 0)
+                {
+                    if (c == '(')
+                        ++inParens;
+                    else if (c == ')')
+                        --inParens;
+                    continue;
+                }
+
+                switch (c)
+                {
+                    case '"':
+                        inDoubleQuotes = true;
+                        continue;
+                    case '\'':
+                        inSingleQuotes = true;
+                        continue;
+                    case '`':
+                        inBackTickQuotes = true;
+                        continue;
+                    case '′':
+                        inPrimeQuotes = true;
+                        continue;
+                    case '[':
+                        inBrackets++;
+                        continue;
+                    case '{':
+                        inBraces++;
+                        continue;
+                    case '(':
+                        inParens++;
+                        continue;
+                    case ',':
+                    {
+                        var arg = argsString.Slice(lastPos, i - lastPos).Trim();
+                        to.Add(arg);
+                        lastPos = i + 1;
+                        continue;
+                    }
+                    case ')':
+                    {
+                        var arg = argsString.Slice(lastPos, i - lastPos).Trim();
+                        if (!arg.IsNullOrEmpty())
+                        {
+                            to.Add(arg);
+                        }
+
+                        args = to;
+                        return argsString.Advance(i);
+                    }
+                }
+            }
+            
+            args = to;
+            return TypeConstants.EmptyStringMemory;
         }
 
         /// <summary>
-        /// Protect against XSS by cleaning non-standared User Input
+        /// Multiple string replacements
+        /// </summary>
+        /// <param name="replaceStringsPairs">Even number of old and new value pairs</param>
+        public static string ReplacePairs(string str, string[] replaceStringsPairs)
+        {
+            if (replaceStringsPairs.Length < 2 || replaceStringsPairs.Length % 2 != 0)
+                throw new ArgumentException("Replacement pairs must be an even number of old and new value pairs", nameof(replaceStringsPairs));
+            
+            for (var i = 0; i < replaceStringsPairs.Length; i+=2)
+            {
+                str = str.Replace(replaceStringsPairs[i], replaceStringsPairs[i + 1]);
+            }
+            return str;
+        }
+        
+        /// <summary>
+        /// Replace string contents outside of string quotes 
+        /// </summary>
+        public static string ReplaceOutsideOfQuotes(this string str, params string[] replaceStringsPairs)
+        {
+            var inDoubleQuotes = false;
+            var inSingleQuotes = false;
+            var inBackTickQuotes = false;
+            var inPrimeQuotes = false;
+            var quoteStartPos = 0;
+            var chunkLastPos = 0;
+
+            var sb = StringBuilderCache.Allocate();
+
+            for (var i = 0; i < str.Length; i++)
+            {
+                var c = str[i];
+                if (i > 0 && c == '\\')
+                {
+                    switch (str[i-1]) 
+                    {
+                        case '"':
+                        case '\'':
+                        case '`':
+                        case '′':
+                            continue;
+                    }
+                }
+
+                if (inDoubleQuotes)
+                {
+                    if (c == '"')
+                    {
+                        sb.Append(str.Substring(quoteStartPos, (chunkLastPos = i) - quoteStartPos));
+                        inDoubleQuotes = false;
+                    }
+                    continue;
+                }
+                if (inSingleQuotes)
+                {
+                    if (c == '\'')
+                    {
+                        sb.Append(str.Substring(quoteStartPos, (chunkLastPos = i) - quoteStartPos));
+                        inSingleQuotes = false;
+                    }
+                    continue;
+                }
+                if (inBackTickQuotes)
+                {
+                    if (c == '`')
+                    {
+                        sb.Append(str.Substring(quoteStartPos, (chunkLastPos = i) - quoteStartPos));
+                        inBackTickQuotes = false;
+                    }
+                    continue;
+                }
+                if (inPrimeQuotes)
+                {
+                    if (c == '′')
+                    {
+                        sb.Append(str.Substring(quoteStartPos, (chunkLastPos = i) - quoteStartPos));
+                        inPrimeQuotes = false;
+                    }
+                    continue;
+                }
+                
+                switch (c) 
+                {
+                    case '"':
+                    case '\'':
+                    case '`':
+                    case '′':
+                        var prevChunk = str.Substring(chunkLastPos, i-chunkLastPos);
+                        sb.Append(ReplacePairs(prevChunk, replaceStringsPairs));
+                        chunkLastPos = i;
+                        quoteStartPos = i;
+                        switch (c)
+                        {
+                            case '"':
+                                inDoubleQuotes = true;
+                                continue;
+                            case '\'':
+                                inSingleQuotes = true;
+                                continue;
+                            case '`':
+                                inBackTickQuotes = true;
+                                continue;
+                            case '′':
+                                inPrimeQuotes = true;
+                                continue;
+                        }
+                        continue;
+                }
+            }
+
+            var lastChunk = str.Substring(chunkLastPos);
+            sb.Append(ReplacePairs(lastChunk, replaceStringsPairs));
+
+            var ret = StringBuilderCache.ReturnAndFree(sb);
+            return ret;
+        }
+
+        /// <summary>
+        /// Protect against XSS by cleaning non-standard User Input
         /// </summary>
         public static string SafeInput(this string text)
         {
@@ -73,12 +408,60 @@ namespace ServiceStack
                 : SafeInputRegEx.Replace(text, "");
         }
 
-        static readonly Regex StripHtmlUnicodeRegEx = new Regex(@"&(#)?([xX])?([^ \f\n\r\t\v;]+);", RegexOptions.Compiled);
+        public static readonly Dictionary<char, string> EscapedCharMap = new Dictionary<char, string> {
+            {'\'', @"\'"},
+            {'\"', "\\\""},
+            {'\\', @"\\"},
+            {'\0', @"\0"},
+            {'\a', @"\a"},
+            {'\b', @"\b"},
+            {'\f', @"\f"},
+            {'\n', @"\n"},
+            {'\r', @"\r"},
+            {'\t', @"\t"},
+            {'\v', @"\v"},
+        };
+
+        public static string ToEscapedString(this string input)
+        {
+            var sb = new StringBuilder(input.Length + 2);
+            sb.Append('"');
+            foreach (var c in input)
+            {
+                if (EscapedCharMap.TryGetValue(c, out var escapedChar))
+                {
+                    sb.Append(escapedChar);
+                }
+                else
+                {
+                    if (char.GetUnicodeCategory(c) != UnicodeCategory.Control)
+                    {
+                        sb.Append(c);
+                    }
+                    else
+                    {
+                        sb.Append(@"\u");
+                        sb.Append(((ushort) c).ToString("x4"));
+                    }
+                }
+            }
+            sb.Append('"');
+            return sb.ToString();
+        }
+
+        static readonly Regex StripHtmlUnicodeRegEx =
+            new Regex(@"&(#)?([xX])?([^ \f\n\r\t\v;]+);", RegexOptions.Compiled);
+
         static readonly Regex SafeInputRegEx = new Regex(@"[^\w\s\.,@-\\+\\/]", RegexOptions.Compiled);
+
+        public static string HtmlEncodeLite(this string html)
+        {
+            return html.Replace("<", "&lt;").Replace(">", "&gt;");
+        }
 
         public static string HtmlEncode(this string html)
         {
-            return System.Net.WebUtility.HtmlEncode(html).Replace("′","&prime;");
+            return System.Net.WebUtility.HtmlEncode(html).Replace("′", "&prime;");
         }
 
         public static string HtmlDecode(this string html)
@@ -97,8 +480,7 @@ namespace ServiceStack
             // match.Groups[0] is the entire match, the sub groups start at index one
             if (!match.Groups[1].Success)
             {
-                string convertedValue;
-                if (HtmlCharacterCodes.TryGetValue(match.Value, out convertedValue))
+                if (HtmlCharacterCodes.TryGetValue(match.Value, out var convertedValue))
                 {
                     return convertedValue;
                 }
@@ -132,10 +514,120 @@ namespace ServiceStack
             return Convert.ToString(Convert.ToChar(codePoint), CultureInfo.InvariantCulture);
         }
 
+        public static List<string> SplitGenericArgs(string argList)
+        {
+            var to = new List<string>();
+            if (string.IsNullOrEmpty(argList))
+                return to;
+
+            var lastPos = 0;
+            var blockCount = 0;
+            for (var i = 0; i < argList.Length; i++)
+            {
+                var argChar = argList[i];
+                switch (argChar)
+                {
+                    case ',':
+                        if (blockCount == 0)
+                        {
+                            var arg = argList.Substring(lastPos, i - lastPos);
+                            to.Add(arg);
+                            lastPos = i + 1;
+                        }
+                        break;
+                    case '<':
+                        blockCount++;
+                        break;
+                    case '>':
+                        blockCount--;
+                        break;
+                }
+            }
+
+            if (lastPos > 0)
+            {
+                var arg = argList.Substring(lastPos);
+                to.Add(arg);
+            }
+            else
+            {
+                to.Add(argList);
+            }
+
+            return to;
+        }
+
+        static char[] blockChars = new[] { '<', '>' };
+        public static TextNode ParseTypeIntoNodes(this string typeDef)
+        {
+            if (string.IsNullOrEmpty(typeDef))
+                return null;
+
+            var node = new TextNode();
+            var lastBlockPos = typeDef.IndexOf('<');
+
+            if (lastBlockPos >= 0)
+            {
+                node.Text = typeDef.Substring(0, lastBlockPos).Trim();
+
+                var blockStartingPos = new Stack<int>();
+                blockStartingPos.Push(lastBlockPos);
+
+                while (lastBlockPos != -1 || blockStartingPos.Count == 0)
+                {
+                    var nextPos = typeDef.IndexOfAny(blockChars, lastBlockPos + 1);
+                    if (nextPos == -1)
+                        break;
+
+                    var blockChar = typeDef.Substring(nextPos, 1);
+
+                    if (blockChar == "<")
+                    {
+                        blockStartingPos.Push(nextPos);
+                    }
+                    else
+                    {
+                        var startPos = blockStartingPos.Pop();
+                        if (blockStartingPos.Count == 0)
+                        {
+                            var endPos = nextPos;
+                            var childBlock = typeDef.Substring(startPos + 1, endPos - startPos - 1);
+
+                            var args = SplitGenericArgs(childBlock);
+                            foreach (var arg in args)
+                            {
+                                if (arg.IndexOfAny(blockChars) >= 0)
+                                {
+                                    var childNode = ParseTypeIntoNodes(arg);
+                                    if (childNode != null)
+                                    {
+                                        node.Children.Add(childNode);
+                                    }
+                                }
+                                else
+                                {
+                                    node.Children.Add(new TextNode { Text = arg.Trim() });
+                                }
+                            }
+
+                        }
+                    }
+
+                    lastBlockPos = nextPos;
+                }
+            }
+            else
+            {
+                node.Text = typeDef.Trim();
+            }
+
+            return node;
+        }
+        
+        
         // http://www.w3.org/TR/html5/entities.json
         // TODO: conditional compilation for NET45 that uses ReadOnlyDictionary
-        public static readonly IDictionary<string, string> HtmlCharacterCodes = new SortedDictionary<string, string>
-        {
+        public static readonly IDictionary<string, string> HtmlCharacterCodes = new SortedDictionary<string, string> {
             {@"&Aacute;", 193.ToChar()},
             {@"&aacute;", 225.ToChar()},
             {@"&Abreve;", 258.ToChar()},

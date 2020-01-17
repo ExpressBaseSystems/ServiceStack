@@ -233,7 +233,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         }
 
         protected abstract IServiceClient CreateNewServiceClient();
-        protected abstract IRestClientAsync CreateNewRestClientAsync();
+        protected abstract IHttpRestClientAsync CreateNewRestClientAsync();
 
         protected virtual string GetFormat()
         {
@@ -279,7 +279,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             req.Headers[HttpHeaders.Authorization]
                 = "basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(AllowedUser + ":" + AllowedPass));
 
-            var dtoString = new StreamReader(req.GetResponse().GetResponseStream()).ReadToEnd();
+            var dtoString = req.GetResponse().GetResponseStream().ReadToEnd();
             Assert.That(dtoString.Contains("Confidential"));
             Console.WriteLine(dtoString);
         }
@@ -323,7 +323,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             req.Headers[HttpHeaders.Authorization]
                 = "basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(AllowedUser + ":" + AllowedPass));
 
-            var dtoString = new StreamReader(req.GetResponse().GetResponseStream()).ReadToEnd();
+            var dtoString = req.GetResponse().GetResponseStream().ReadToEnd();
             Assert.That(dtoString.Contains("Public"));
             Console.WriteLine(dtoString);
         }
@@ -372,7 +372,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 req = (HttpWebRequest)WebRequest.Create(ServiceClientBaseUri.CombineWith("{0}/reply/Secure".Fmt(format)));
                 req.CookieContainer.Add(new Uri(ServiceClientBaseUri), new Cookie("ss-session", cookie.Value));
 
-                var dtoString = new StreamReader(req.GetResponse().GetResponseStream()).ReadToEnd();
+                var dtoString = req.GetResponse().GetResponseStream().ReadToEnd();
                 Assert.That(dtoString.Contains("Confidential"));
                 Console.WriteLine(dtoString);
             }
@@ -538,7 +538,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 return new DirectServiceClient(appHost.ServiceController);
             }
 
-            protected override IRestClientAsync CreateNewRestClientAsync()
+            protected override IHttpRestClientAsync CreateNewRestClientAsync()
             {
                 return null; //TODO implement REST calls with DirectServiceClient (i.e. Unit Tests)
                 //EndpointHandlerBase.ServiceManager = new ServiceManager(true, typeof(SecureService).Assembly);
@@ -558,7 +558,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 return new XmlServiceClient(ServiceClientBaseUri);
             }
 
-            protected override IRestClientAsync CreateNewRestClientAsync()
+            protected override IHttpRestClientAsync CreateNewRestClientAsync()
             {
                 return new XmlServiceClient(ServiceClientBaseUri);
             }
@@ -577,7 +577,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 return new JsonServiceClient(ServiceClientBaseUri);
             }
 
-            protected override IRestClientAsync CreateNewRestClientAsync()
+            protected override IHttpRestClientAsync CreateNewRestClientAsync()
             {
                 return new JsonServiceClient(ServiceClientBaseUri);
             }
@@ -596,7 +596,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 return new JsvServiceClient(ServiceClientBaseUri);
             }
 
-            protected override IRestClientAsync CreateNewRestClientAsync()
+            protected override IHttpRestClientAsync CreateNewRestClientAsync()
             {
                 return new JsvServiceClient(ServiceClientBaseUri);
             }
@@ -612,7 +612,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 return new Soap11ServiceClient(ServiceClientBaseUri);
             }
 
-            protected override IRestClientAsync CreateNewRestClientAsync()
+            protected override IHttpRestClientAsync CreateNewRestClientAsync()
             {
                 return null;
             }
@@ -626,7 +626,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 return new Soap12ServiceClient(ServiceClientBaseUri);
             }
 
-            protected override IRestClientAsync CreateNewRestClientAsync()
+            protected override IHttpRestClientAsync CreateNewRestClientAsync()
             {
                 return null;
             }

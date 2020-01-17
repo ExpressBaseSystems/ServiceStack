@@ -140,6 +140,7 @@ namespace ServiceStack
 
         public int Version { get; set; }
         public string SessionId { get; set; }
+        public string BearerToken { get; set; }
 
         protected WcfServiceClient()
         {
@@ -609,6 +610,21 @@ namespace ServiceStack
         }
 
         public Task PutAsync(IReturnVoid requestDto)
+        {
+            throw new NotImplementedException();
+        }
+
+        public Task<TResponse> PatchAsync<TResponse>(IReturn<TResponse> requestDto)
+        {
+            throw new NotImplementedException();
+        }
+
+        public Task<TResponse> PatchAsync<TResponse>(object requestDto)
+        {
+            throw new NotImplementedException();
+        }
+
+        public Task PatchAsync(IReturnVoid requestDto)
         {
             throw new NotImplementedException();
         }

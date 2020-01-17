@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Text;
 
 namespace ServiceStack.Messaging
@@ -55,15 +56,36 @@ namespace ServiceStack.Messaging
 
         public override string ToString()
         {
-            var sb = new StringBuilder("Stats for " + Name);
-            sb.AppendLine("\n---------------");
-            sb.AppendFormat("\nTotalNormalMessagesReceived: {0}", TotalNormalMessagesReceived);
-            sb.AppendFormat("\nTotalPriorityMessagesReceived: {0}", TotalPriorityMessagesReceived);
-            sb.AppendFormat("\nTotalProcessed: {0}", TotalMessagesProcessed);
-            sb.AppendFormat("\nTotalRetries: {0}", TotalRetries);
-            sb.AppendFormat("\nTotalFailed: {0}", TotalMessagesFailed);
-            sb.AppendFormat("\nLastMessageProcessed: {0}", LastMessageProcessed.HasValue ? LastMessageProcessed.Value.ToString() : "");
+            var sb = new StringBuilder();
+            sb.AppendLine($"STATS for {Name}:").AppendLine();            
+            sb.AppendLine($"  TotalNormalMessagesReceived:    {TotalNormalMessagesReceived}");
+            sb.AppendLine($"  TotalPriorityMessagesReceived:  {TotalPriorityMessagesReceived}");
+            sb.AppendLine($"  TotalProcessed:                 {TotalMessagesProcessed}");
+            sb.AppendLine($"  TotalRetries:                   {TotalRetries}");
+            sb.AppendLine($"  TotalFailed:                    {TotalMessagesFailed}");
+            sb.AppendLine($"  LastMessageProcessed:           {LastMessageProcessed?.ToString() ?? ""}");
             return sb.ToString();
+        }
+    }
+
+    public static class MessageHandlerStatsExtensions
+    {
+        public static IMessageHandlerStats CombineStats(this IEnumerable<IMessageHandlerStats> stats)
+        {
+            IMessageHandlerStats to = null;
+
+            if (stats != null)
+            {
+                foreach (var stat in stats)
+                {
+                    if (to == null)
+                        to = new MessageHandlerStats(stat.Name);
+
+                    to.Add(stat);
+                }
+            }
+
+            return to;
         }
     }
 }

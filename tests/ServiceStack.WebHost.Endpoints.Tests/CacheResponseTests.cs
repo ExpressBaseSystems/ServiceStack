@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -109,12 +110,21 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         public string Value { get; set; }
     }
 
+    [Route("/cache/stream-result/{Id}")]
+    public class CacheStream : ICacheDto
+    {
+        internal static int Count = 0;
+
+        public int Id { get; set; }
+        public string Value { get; set; }
+    }
+
     public class CacheResponseServices : Service
     {
         [CacheResponse(Duration = 5000)]
         public object Any(HelloCache request)
         {
-            return new HelloResponse { Result = "Hello, {0}!".Fmt(request.Name) };
+            return new HelloResponse { Result = $"Hello, {request.Name}!"};
         }
 
         [CacheResponse(Duration = 10)]
@@ -193,8 +203,24 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             Interlocked.Increment(ref CacheCustomJson.Count);
             return new HttpResult(request)
             {
-                ResultScope = () => JsConfig.With(emitCamelCaseNames:true, includeNullValues:true)
+                ResultScope = () => JsConfig.With(new Text.Config
+                {
+                    TextCase = TextCase.CamelCase,
+                    IncludeNullValues = true,
+                })
             };
+        }
+
+        [AddHeader(ContentType = MimeTypes.Jsv)]
+        [CacheResponse(Duration = 5000)]
+        public object Any(CacheStream request)
+        {
+            Interlocked.Increment(ref CacheStream.Count);
+
+            var jsv = request.ToJsv();
+            var bytes = jsv.ToUtf8Bytes();
+            var ms = bytes.InMemoryStream();
+            return ms;
         }
     }
 
@@ -422,7 +448,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
 #endif
             var webRes = webReq.GetResponse();
             Assert.That(webRes.ContentType, Does.StartWith(MimeTypes.Json));
-            response = webRes.GetResponseStream().ReadFully().FromUtf8Bytes()
+            response = webRes.GetResponseStream().ReadToEnd()
                 .FromJson<ServerCacheOnly>();
             Assert.That(ServerCacheOnly.Count, Is.EqualTo(1)); //Uses plain json cache from #1
             AssertEquals(response, request);
@@ -603,6 +629,40 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 .GetJsonFromUrl();
             
             Assert.That(json, Is.EqualTo("{\"id\":1,\"value\":null}"));
+        }
+
+        [Test]
+        public void Does_cache_MemoryStream_HttpResult_Responses_preserving_ContentType()
+        {
+            CacheStream.Count = 0;
+            var request = new CacheStream { Id = 1, Value = "foo" };
+
+            var response = Config.ListeningOn.CombineWith(request.ToGetUrl())
+                .GetStringFromUrl(responseFilter: res =>
+                {
+                    Assert.That(res.ContentType, Does.StartWith(MimeTypes.Jsv));
+                    Assert.That(res.Headers[HttpHeaders.CacheControl], Is.Null);
+                })
+                .FromJsv<CacheStream>();
+
+            Assert.That(CacheStream.Count, Is.EqualTo(1));
+            AssertEquals(response, request);
+
+            response = Config.ListeningOn.CombineWith(request.ToGetUrl())
+                .GetStringFromUrl(responseFilter: res =>
+                {
+                    Assert.That(res.ContentType, Does.StartWith(MimeTypes.Jsv));
+                    Assert.That(res.Headers[HttpHeaders.CacheControl], Is.Null);
+                })
+                .FromJsv<CacheStream>();
+
+            Assert.That(CacheStream.Count, Is.EqualTo(1));
+            AssertEquals(response, request);
+
+            var client = new JsvServiceClient(Config.ListeningOn);
+            response = client.Get<CacheStream>(request);
+            Assert.That(CacheStream.Count, Is.EqualTo(1));
+            AssertEquals(response, request);
         }
 
     }

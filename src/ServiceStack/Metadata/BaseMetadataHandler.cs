@@ -19,21 +19,15 @@ namespace ServiceStack.Metadata
         public string ContentType { get; set; }
         public string ContentFormat { get; set; }
 
-        public override Task ProcessRequestAsync(IRequest httpReq, IResponse httpRes, string operationName)
+        public override async Task ProcessRequestAsync(IRequest httpReq, IResponse httpRes, string operationName)
         {
             if (HostContext.ApplyCustomHandlerRequestFilters(httpReq, httpRes))
-                return TypeConstants.EmptyTask;
+                return;
 
-            using (var sw = new StreamWriter(httpRes.OutputStream))
-            {
-                var writer = new HtmlTextWriter(sw);
-               httpRes.ContentType = "text/html; charset=utf-8";
-               ProcessOperations(writer, httpReq, httpRes);
-            }
+            httpRes.ContentType = "text/html; charset=utf-8";
+            await ProcessOperationsAsync(httpRes.OutputStream, httpReq, httpRes);
 
-            httpRes.EndHttpHandlerRequest(skipHeaders:true);
-
-            return TypeConstants.EmptyTask;
+            await httpRes.EndHttpHandlerRequestAsync(skipHeaders:true);
         }
 
         public virtual string CreateResponse(Type type)
@@ -52,11 +46,12 @@ namespace ServiceStack.Metadata
             return CreateMessage(type);
         }
 
-        protected virtual void ProcessOperations(HtmlTextWriter writer, IRequest httpReq, IResponse httpRes)
+        protected virtual Task ProcessOperationsAsync(Stream writer, IRequest httpReq, IResponse httpRes)
         {
             var operationName = httpReq.QueryString["op"];
 
-            if (!AssertAccess(httpReq, httpRes, operationName)) return;
+            if (!AssertAccess(httpReq, httpRes, operationName)) 
+                return TypeConstants.EmptyTask;
 
             ContentFormat = ServiceStack.ContentFormat.GetContentFormat(Format);
             var metadata = HostContext.Metadata;
@@ -163,17 +158,60 @@ namespace ServiceStack.Metadata
                 }
                 sb.Append("</div>");
 
-                RenderOperation(writer, httpReq, operationName, requestMessage, responseMessage,
+                return RenderOperationAsync(writer, httpReq, operationName, requestMessage, responseMessage,
                     StringBuilderCache.ReturnAndFree(sb), op);
-                return;
             }
 
-            RenderOperations(writer, httpReq, metadata);
+            return RenderOperationsAsync(writer, httpReq, metadata);
         }
 
         private void AppendType(StringBuilder sb, Operation op, MetadataType metadataType)
         {
-            if (metadataType.Properties.IsEmpty()) return;
+            if (metadataType.IsEnum == true)
+            {
+                sb.Append("<table class='enum'>");
+                sb.Append($"<caption><b>{ConvertToHtml(metadataType.DisplayType ?? metadataType.Name)}</b> Enum:</caption>");
+
+                var hasEnumValues = !metadataType.EnumMemberValues.IsEmpty() ||
+                                    !metadataType.EnumValues.IsEmpty();
+                if (hasEnumValues)
+                {
+                    sb.Append("<thead><tr>");
+                    sb.Append("<th>Name</th>");
+                    sb.Append("<th>Value</th>");
+                    sb.Append("</tr></thead>");
+                }
+                
+                sb.Append("<tbody>");
+
+                for (var i = 0; i < metadataType.EnumNames.Count; i++)
+                {
+                    sb.Append("<tr>");
+                    if (hasEnumValues)
+                    {
+                        sb.Append("<td>")
+                          .Append(metadataType.EnumNames[i])
+                          .Append("</td><td>")
+                          .Append(!metadataType.EnumMemberValues.IsEmpty() 
+                                ? metadataType.EnumMemberValues[i]
+                                : metadataType.EnumValues[i])
+                          .Append("</td>");
+                    }
+                    else
+                    {
+                        sb.Append("<td>")
+                          .Append(metadataType.EnumNames[i])
+                          .Append("</td>");
+                    }
+                    sb.Append("</tr>");
+                }
+                
+                sb.Append("</tbody>");
+                sb.Append("</table>");
+                return;
+            }
+            if (metadataType.Properties.IsEmpty()) 
+                return;
             
             sb.Append("<table class='params'>");
             sb.Append($"<caption><b>{ConvertToHtml(metadataType.DisplayType ?? metadataType.Name)}</b> Parameters:</caption>");
@@ -214,7 +252,7 @@ namespace ServiceStack.Metadata
             sb.Append("</table>");
         }
 
-        protected void RenderOperations(HtmlTextWriter writer, IRequest httpReq, ServiceMetadata metadata)
+        protected virtual Task RenderOperationsAsync(Stream output, IRequest httpReq, ServiceMetadata metadata)
         {
             var defaultPage = new IndexOperationsControl
             {
@@ -229,7 +267,7 @@ namespace ServiceStack.Metadata
             var metadataFeature = HostContext.GetPlugin<MetadataFeature>();
             metadataFeature?.IndexPageFilter?.Invoke(defaultPage);
 
-            defaultPage.RenderControl(writer);
+            return defaultPage.RenderAsync(output);
         }
 
         private string ConvertToHtml(string text)
@@ -257,7 +295,7 @@ namespace ServiceStack.Metadata
 
         protected abstract string CreateMessage(Type dtoType);
 
-        protected virtual void RenderOperation(HtmlTextWriter writer, IRequest httpReq, string operationName,
+        protected virtual Task RenderOperationAsync(Stream output, IRequest httpReq, string operationName,
             string requestMessage, string responseMessage, string metadataHtml, Operation operation)
         {
             var operationControl = new OperationControl
@@ -284,7 +322,7 @@ namespace ServiceStack.Metadata
 
             var metadataFeature = HostContext.GetPlugin<MetadataFeature>();
             metadataFeature?.DetailPageFilter?.Invoke(operationControl);
-            operationControl.Render(writer);
+            return operationControl.RenderAsync(output);
         }
 
     }

@@ -201,11 +201,17 @@ namespace ServiceStack.Razor.Managers
                     pageInstance.WriteTo(childWriter);
                 }
                 catch (StopExecutionException) { }
+                catch (Exception ex)
+                {
+                    ex = ex.UnwrapIfSingleException();
+                    if (!(ex is StopExecutionException))
+                        throw;
+                }
 
                 if (httpRes.IsClosed)
                     return null;
 
-                var childBody = ms.ToArray().FromUtf8Bytes();
+                var childBody = ms.ReadToEnd();
 
                 var layoutName = layout();
                 if (!string.IsNullOrEmpty(layoutName))
@@ -264,7 +270,7 @@ namespace ServiceStack.Razor.Managers
             if (hasModel.ModelType == typeof(DynamicRequestObject))
                 dto = new DynamicRequestObject(httpReq, dto);
 
-            var model = dto ?? DeserializeHttpRequest(hasModel.ModelType, httpReq, httpReq.ContentType);
+            var model = dto ?? DeserializeHttpRequestAsync(hasModel.ModelType, httpReq, httpReq.ContentType).GetResult();
 
             if (model.GetType().IsAnonymousType())
             {

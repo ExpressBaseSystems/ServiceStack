@@ -5,17 +5,32 @@ using System.Runtime.Serialization;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using Funq;
+using ServiceStack.ProtoBuf;
 using ServiceStack.Text;
 using ServiceStack.Web;
 
 namespace ServiceStack.WebHost.Endpoints.Tests
 {
     [Route("/users")]
-    public class User { }
+    [DataContract]
+    public class User {}
+
+    [DataContract]
     public class UserResponse : IHasResponseStatus
     {
-        public ResponseStatus ResponseStatus { get; set; }
+        [DataMember(Order = 1)] public ResponseStatus ResponseStatus { get; set; }
     }
+
+    [Route("/usersvoid")]
+    public class UserVoid {}
+
+    [DataContract]
+    public class UserVoidResponse : IHasResponseStatus
+    {
+        [DataMember(Order = 1)] public ResponseStatus ResponseStatus { get; set; }
+    }
+
+    public class UserReturnVoid : IReturnVoid {}
 
     public class UserService : Service
     {
@@ -38,18 +53,32 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         {
             throw new ArgumentException();
         }
+
+        public void Delete(UserVoid request)
+        {
+            throw new HttpError(HttpStatusCode.Forbidden, "CanNotExecute", "Failed to execute!");
+        }
+
+        public void Delete(UserReturnVoid request)
+        {
+            throw new HttpError(HttpStatusCode.Forbidden, "CanNotExecute", "Failed to execute!");
+        }
     }
 
     public class CustomException : ArgumentException
     {
-        public CustomException() : base("User Defined Error") { }
+        public CustomException() : base("User Defined Error")
+        {
+        }
     }
 
-    public class ExceptionWithResponseStatus { }
+    public class ExceptionWithResponseStatus {}
+
     public class ExceptionWithResponseStatusResponse
     {
         public ResponseStatus ResponseStatus { get; set; }
     }
+
     public class ExceptionWithResponseStatusService : Service
     {
         public object Any(ExceptionWithResponseStatus request)
@@ -58,8 +87,10 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         }
     }
 
-    public class ExceptionNoResponseStatus { }
-    public class ExceptionNoResponseStatusResponse { }
+    public class ExceptionNoResponseStatus {}
+
+    public class ExceptionNoResponseStatusResponse {}
+
     public class ExceptionNoResponseStatusService : Service
     {
         public object Any(ExceptionNoResponseStatus request)
@@ -68,7 +99,8 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         }
     }
 
-    public class ExceptionNoResponseDto { }
+    public class ExceptionNoResponseDto {}
+
     public class ExceptionNoResponseDtoService : Service
     {
         public object Any(ExceptionNoResponseDto request)
@@ -77,7 +109,8 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         }
     }
 
-    public class ExceptionReturnVoid : IReturnVoid { }
+    public class ExceptionReturnVoid : IReturnVoid {}
+
     public class ExceptionReturnVoidService : Service
     {
         public void Any(ExceptionReturnVoid request)
@@ -86,8 +119,9 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         }
     }
 
-    public class CaughtException { }
-    public class CaughtExceptionAsync { }
+    public class CaughtException {}
+    public class CaughtExceptionAsync {}
+
     public class CaughtExceptionService : Service
     {
         public object Any(CaughtException request)
@@ -102,9 +136,10 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         }
     }
 
-    public class UncatchedException { }
-    public class UncatchedExceptionAsync { }
-    public class UncatchedExceptionResponse { }
+    public class UncatchedException {}
+    public class UncatchedExceptionAsync {}
+    public class UncatchedExceptionResponse {}
+
     public class UncatchedExceptionService : Service
     {
         public object Any(UncatchedException request)
@@ -140,11 +175,13 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         public int StatusCode { get; set; }
         public string StatusDescription { get; set; }
     }
+
     public class CustomHttpErrorResponse
     {
         public string Custom { get; set; }
         public ResponseStatus ResponseStatus { get; set; }
     }
+
     public class CustomHttpErrorService : Service
     {
         public object Any(CustomHttpError request)
@@ -153,28 +190,48 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         }
     }
 
-    public class CustomFieldHttpError { }
+
+    [Route("/alwaysthrowsjsscope")]
+    [DataContract]
+    public class AlwaysThrowsJsScope
+    {
+        [DataMember] public string TheValue { get; set; }
+    }
+
+    public class CustomFieldHttpError {}
+
     public class CustomFieldHttpErrorResponse
     {
         public string Custom { get; set; }
         public ResponseStatus ResponseStatus { get; set; }
     }
+
     public class CustomFieldHttpErrorService : Service
     {
         public object Any(CustomFieldHttpError request)
         {
             throw new HttpError(new CustomFieldHttpErrorResponse
-            {
-                Custom = "Ignored",
-                ResponseStatus = new ResponseStatus("StatusErrorCode", "StatusErrorMessage")
-            },
-            500,
-            "HeaderErrorCode");
+                {
+                    Custom = "Ignored",
+                    ResponseStatus = new ResponseStatus("StatusErrorCode", "StatusErrorMessage")
+                },
+                500,
+                "HeaderErrorCode");
         }
+
+        public object Any(AlwaysThrowsJsScope request) =>
+            throw new HttpError(HttpStatusCode.BadRequest)
+            {
+                ResultScope = () => JsConfig.With(new Text.Config
+                {
+                    TextCase = TextCase.SnakeCase,
+                })
+            };
     }
 
 
-    public class DirectHttpError { }
+    public class DirectHttpError {}
+
     public class DirectResponseService : Service
     {
         public object Any(DirectHttpError request)
@@ -191,6 +248,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
     }
 
     public class ErrorStream {}
+
     public class ErrorStreamService : Service
     {
         [AddHeader(ContentType = "application/pdf")]
@@ -206,19 +264,34 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         public class AppHost : AppSelfHostBase
         {
             public AppHost()
-                : base(nameof(ExceptionHandlingTests), typeof(UserService).Assembly) {}
+                : base(nameof(ExceptionHandlingTests), typeof(UserService).Assembly)
+            {
+            }
 
             public override void Configure(Container container)
             {
-                JsConfig.EmitCamelCaseNames = true;
+                JsConfig.Init(new Text.Config
+                {
+                    TextCase = TextCase.CamelCase,
+                });
 
-                SetConfig(new HostConfig { DebugMode = false });
+                SetConfig(new HostConfig
+                {
+                    DebugMode = false,
+                });
+
+                Plugins.Add(new ProtoBufFormat());
+
+                GlobalRequestFilters.Add((req, res, dto) => {
+                    if (dto is UncatchedException || dto is UncatchedExceptionAsync)
+                        throw new ArgumentException();
+                });
 
                 //Custom global uncaught exception handling strategy
                 this.UncaughtExceptionHandlers.Add((req, res, operationName, ex) =>
                 {
                     res.WriteAsync($"UncaughtException {ex.GetType().Name}")
-                       .ContinueWith(t => res.EndRequest(skipHeaders: true));
+                        .ContinueWith(t => res.EndRequest(skipHeaders: true));
                 });
 
                 this.ServiceExceptionHandlers.Add((httpReq, request, ex) =>
@@ -239,7 +312,8 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 base.OnExceptionTypeFilter(ex, responseStatus);
             }
 
-            public override Task OnUncaughtException(IRequest httpReq, IResponse httpRes, string operationName, Exception ex)
+            public override Task OnUncaughtException(IRequest httpReq, IResponse httpRes, string operationName,
+                Exception ex)
             {
                 "In OnUncaughtException...".Print();
                 return base.OnUncaughtException(httpReq, httpRes, operationName, ex);
@@ -247,6 +321,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         }
 
         AppHost appHost;
+
         public ExceptionHandlingTests()
         {
             appHost = new AppHost();
@@ -259,18 +334,20 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         {
             appHost.Dispose();
             appHost.UncaughtExceptionHandlers = null;
+            JsConfig.Reset();
         }
 
-        static IRestClient[] ServiceClients = 
-		{
-			new JsonServiceClient(Config.ListeningOn),
-			new JsonHttpClient(Config.ListeningOn),
-			new XmlServiceClient(Config.ListeningOn),
-			new JsvServiceClient(Config.ListeningOn)
-			//SOAP not supported in HttpListener
-			//new Soap11ServiceClient(ServiceClientBaseUri),
-			//new Soap12ServiceClient(ServiceClientBaseUri)
-		};
+        static IRestClient[] ServiceClients =
+        {
+            new JsonServiceClient(Config.ListeningOn),
+            new JsonHttpClient(Config.ListeningOn),
+            new XmlServiceClient(Config.ListeningOn),
+            new JsvServiceClient(Config.ListeningOn),
+            new ProtoBufServiceClient(Config.ListeningOn),
+            //SOAP not supported in HttpListener
+            //new Soap11ServiceClient(ServiceClientBaseUri),
+            //new Soap12ServiceClient(ServiceClientBaseUri)
+        };
 
 
         [Test, TestCaseSource("ServiceClients")]
@@ -283,7 +360,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             }
             catch (WebServiceException ex)
             {
-                Assert.That(ex.StatusCode, Is.EqualTo((int)System.Net.HttpStatusCode.BadRequest));
+                Assert.That(ex.StatusCode, Is.EqualTo((int) System.Net.HttpStatusCode.BadRequest));
                 Assert.That(ex.ErrorCode, Is.EqualTo("CanNotExecute"));
                 Assert.That(ex.Message, Is.EqualTo("Failed to execute!"));
             }
@@ -299,7 +376,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             }
             catch (WebServiceException ex)
             {
-                Assert.That(ex.StatusCode, Is.EqualTo((int)System.Net.HttpStatusCode.BadRequest));
+                Assert.That(ex.StatusCode, Is.EqualTo((int) System.Net.HttpStatusCode.BadRequest));
                 Assert.That(ex.ErrorCode, Is.EqualTo("CanNotExecute"));
                 Assert.That(ex.Message, Is.EqualTo("Failed to execute!"));
             }
@@ -315,7 +392,39 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             }
             catch (WebServiceException ex)
             {
-                Assert.That(ex.StatusCode, Is.EqualTo((int)System.Net.HttpStatusCode.Forbidden));
+                Assert.That(ex.StatusCode, Is.EqualTo((int) System.Net.HttpStatusCode.Forbidden));
+                Assert.That(ex.ErrorCode, Is.EqualTo("CanNotExecute"));
+                Assert.That(ex.Message, Is.EqualTo("Failed to execute!"));
+            }
+        }
+
+        [Test, TestCaseSource("ServiceClients")]
+        public void Handles_Thrown_Http_Error_With_Forbidden_status_code_in_void_method(IRestClient client)
+        {
+            try
+            {
+                client.Delete<UserVoidResponse>("/usersvoid");
+                Assert.Fail();
+            }
+            catch (WebServiceException ex)
+            {
+                Assert.That(ex.StatusCode, Is.EqualTo((int) System.Net.HttpStatusCode.Forbidden));
+                Assert.That(ex.ErrorCode, Is.EqualTo("CanNotExecute"));
+                Assert.That(ex.Message, Is.EqualTo("Failed to execute!"));
+            }
+        }
+
+        [Test, TestCaseSource("ServiceClients")]
+        public void Handles_Thrown_Http_Error_With_Forbidden_status_code_using_IReturnVoid(IRestClient client)
+        {
+            try
+            {
+                client.Delete(new UserReturnVoid());
+                Assert.Fail();
+            }
+            catch (WebServiceException ex)
+            {
+                Assert.That(ex.StatusCode, Is.EqualTo((int) System.Net.HttpStatusCode.Forbidden));
                 Assert.That(ex.ErrorCode, Is.EqualTo("CanNotExecute"));
                 Assert.That(ex.Message, Is.EqualTo("Failed to execute!"));
             }
@@ -334,7 +443,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 Assert.That(ex.IsAny400());
                 Assert.That(!ex.IsAny500());
                 Assert.That(ex.ErrorCode, Is.EqualTo("ArgumentException"));
-                Assert.That(ex.StatusCode, Is.EqualTo((int)System.Net.HttpStatusCode.BadRequest));
+                Assert.That(ex.StatusCode, Is.EqualTo((int) System.Net.HttpStatusCode.BadRequest));
             }
         }
 
@@ -351,7 +460,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 Assert.That(ex.IsAny400());
                 Assert.That(!ex.IsAny500());
                 Assert.That(ex.ErrorCode, Is.EqualTo("NotImplementedException"));
-                Assert.That(ex.StatusCode, Is.EqualTo((int)System.Net.HttpStatusCode.MethodNotAllowed));
+                Assert.That(ex.StatusCode, Is.EqualTo((int) System.Net.HttpStatusCode.MethodNotAllowed));
             }
         }
 
@@ -370,10 +479,10 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             }
             catch (WebException webEx)
             {
-                var errorResponse = ((HttpWebResponse)webEx.Response);
+                var errorResponse = ((HttpWebResponse) webEx.Response);
                 Assert.That(webEx.IsAny400());
                 Assert.That(!webEx.IsAny500());
-                var body = errorResponse.GetResponseStream().ReadFully().FromUtf8Bytes();
+                var body = errorResponse.GetResponseStream().ReadToEnd();
                 Assert.That(body, Is.EqualTo(
                     "{\"responseStatus\":{\"errorCode\":\"CustomException\",\"message\":\"User Defined Error\",\"errors\":[]}}"));
             }
@@ -389,8 +498,8 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             }
             catch (WebException webEx)
             {
-                var errorResponse = ((HttpWebResponse)webEx.Response);
-                var body = errorResponse.GetResponseStream().ReadFully().FromUtf8Bytes();
+                var errorResponse = ((HttpWebResponse) webEx.Response);
+                var body = errorResponse.GetResponseStream().ReadToEnd();
                 Assert.That(body, Is.EqualTo("{}"));
             }
         }
@@ -405,9 +514,11 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             }
             catch (WebException webEx)
             {
-                var errorResponse = ((HttpWebResponse)webEx.Response);
-                var body = errorResponse.GetResponseStream().ReadFully().FromUtf8Bytes();
-                Assert.That(body, Does.StartWith("{\"responseStatus\":{\"errorCode\":\"CustomException\",\"message\":\"User Defined Error\""));
+                var errorResponse = ((HttpWebResponse) webEx.Response);
+                var body = errorResponse.GetResponseStream().ReadToEnd();
+                Assert.That(body,
+                    Does.StartWith(
+                        "{\"responseStatus\":{\"errorCode\":\"CustomException\",\"message\":\"User Defined Error\""));
             }
         }
 
@@ -421,9 +532,11 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             }
             catch (WebException webEx)
             {
-                var errorResponse = ((HttpWebResponse)webEx.Response);
-                var body = errorResponse.GetResponseStream().ReadFully().FromUtf8Bytes();
-                Assert.That(body, Does.StartWith("{\"responseStatus\":{\"errorCode\":\"CustomException\",\"message\":\"User Defined Error\""));
+                var errorResponse = ((HttpWebResponse) webEx.Response);
+                var body = errorResponse.GetResponseStream().ReadToEnd();
+                Assert.That(body,
+                    Does.StartWith(
+                        "{\"responseStatus\":{\"errorCode\":\"CustomException\",\"message\":\"User Defined Error\""));
             }
 
             try
@@ -439,7 +552,9 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 Assert.That(ex.StatusDescription, Is.EqualTo(typeof(CustomException).Name));
                 Assert.That(ex.ErrorCode, Is.EqualTo(typeof(CustomException).Name));
                 Assert.That(ex.ErrorMessage, Is.EqualTo("User Defined Error"));
-                Assert.That(ex.ResponseBody, Does.StartWith("{\"responseStatus\":{\"errorCode\":\"CustomException\",\"message\":\"User Defined Error\""));
+                Assert.That(ex.ResponseBody,
+                    Does.StartWith(
+                        "{\"responseStatus\":{\"errorCode\":\"CustomException\",\"message\":\"User Defined Error\""));
             }
         }
 
@@ -453,12 +568,12 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             }
             catch (WebException webEx)
             {
-                var errorResponse = ((HttpWebResponse)webEx.Response);
-                Assert.That((int)errorResponse.StatusCode, Is.EqualTo(500));
+                var errorResponse = ((HttpWebResponse) webEx.Response);
+                Assert.That((int) errorResponse.StatusCode, Is.EqualTo(500));
                 Assert.That(webEx.IsAny500());
                 Assert.That(errorResponse.StatusDescription, Is.EqualTo("HeaderErrorCode"));
 
-                var body = errorResponse.GetResponseStream().ReadFully().FromUtf8Bytes();
+                var body = errorResponse.GetResponseStream().ReadToEnd();
                 var customResponse = body.FromJson<CustomFieldHttpErrorResponse>();
                 var errorStatus = customResponse.ResponseStatus;
                 Assert.That(errorStatus.ErrorCode, Is.EqualTo("StatusErrorCode"));
@@ -480,8 +595,8 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             }
             catch (WebException webEx)
             {
-                var errorResponse = ((HttpWebResponse)webEx.Response);
-                Assert.That((int)errorResponse.StatusCode, Is.EqualTo(406));
+                var errorResponse = ((HttpWebResponse) webEx.Response);
+                Assert.That((int) errorResponse.StatusCode, Is.EqualTo(406));
                 Assert.That(webEx.IsAny400());
                 Assert.That(errorResponse.StatusDescription, Is.EqualTo("CustomDescription"));
             }
@@ -497,12 +612,12 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             }
             catch (WebException webEx)
             {
-                var errorResponse = ((HttpWebResponse)webEx.Response);
-                Assert.That((int)errorResponse.StatusCode, Is.EqualTo(500));
+                var errorResponse = ((HttpWebResponse) webEx.Response);
+                Assert.That((int) errorResponse.StatusCode, Is.EqualTo(500));
                 Assert.That(webEx.IsAny500());
                 Assert.That(errorResponse.StatusDescription, Is.EqualTo("HeaderErrorCode"));
 
-                var body = errorResponse.GetResponseStream().ReadFully().FromUtf8Bytes();
+                var body = errorResponse.GetResponseStream().ReadToEnd();
                 var customResponse = body.FromJson<CustomFieldHttpErrorResponse>();
                 var errorStatus = customResponse.ResponseStatus;
                 Assert.That(errorStatus.ErrorCode, Is.EqualTo("StatusErrorCode"));
@@ -514,7 +629,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         [Test]
         public void Can_override_global_exception_handling()
         {
-            var req = (HttpWebRequest)WebRequest.Create(PredefinedJsonUrl<UncatchedException>());
+            var req = (HttpWebRequest) WebRequest.Create(PredefinedJsonUrl<UncatchedException>());
             var res = req.GetResponse().ReadToEnd();
             Assert.AreEqual("UncaughtException ArgumentException", res);
         }
@@ -522,7 +637,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         [Test]
         public void Can_override_global_exception_handling_async()
         {
-            var req = (HttpWebRequest)WebRequest.Create(PredefinedJsonUrl<UncatchedExceptionAsync>());
+            var req = (HttpWebRequest) WebRequest.Create(PredefinedJsonUrl<UncatchedExceptionAsync>());
             var res = req.GetResponse().ReadToEnd();
             Assert.AreEqual("UncaughtException ArgumentException", res);
         }
@@ -532,7 +647,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         {
             try
             {
-                var req = (HttpWebRequest)WebRequest.Create(PredefinedJsonUrl<CaughtException>());
+                var req = (HttpWebRequest) WebRequest.Create(PredefinedJsonUrl<CaughtException>());
                 var res = req.GetResponse().ReadToEnd();
                 Assert.Fail("Should Throw");
             }
@@ -550,7 +665,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         {
             try
             {
-                var req = (HttpWebRequest)WebRequest.Create(PredefinedJsonUrl<CaughtExceptionAsync>());
+                var req = (HttpWebRequest) WebRequest.Create(PredefinedJsonUrl<CaughtExceptionAsync>());
                 var res = req.GetResponse().ReadToEnd();
                 Assert.Fail("Should Throw");
             }
@@ -571,6 +686,21 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 .GetStringFromUrl();
 
             Assert.That(response, Is.EqualTo("UncaughtException SerializationException"));
+        }
+
+        [Test]
+        public void Does_serialize_HttpError_with_CustomScope()
+        {
+            try
+            {
+                var json = Config.ListeningOn.AppendPath("/alwaysthrowsjsscope").GetJsonFromUrl();
+                Assert.Fail("Should throw");
+            }
+            catch (WebException e)
+            {
+                var json = e.GetResponseBody();
+                Assert.That(json, Does.Contain("response_status"));
+            }
         }
     }
 }

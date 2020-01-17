@@ -34,9 +34,11 @@ namespace ServiceStack.Common.Tests
                 {"DictionaryKey:C", "3"},
                 {"DictionaryKey:D", "4"},
                 {"DictionaryKey:E", "5"},
-                {"BadDictionaryKey", "A1,B:"},
+                {"BadDictionaryKey", "A1,B"},
                 {"ObjectNoLineFeed", "{SomeSetting:Test,SomeOtherSetting:12,FinalSetting:Final}"},
                 {"ObjectWithLineFeed", "{SomeSetting:Test,\r\nSomeOtherSetting:12,\r\nFinalSetting:Final}"},
+                {"Email:From", "test@email.com"},
+                {"Email:Subject", "The Subject"},
             };
 
             var configurationBuilder = new ConfigurationBuilder();
@@ -45,6 +47,22 @@ namespace ServiceStack.Common.Tests
             var appSettings = new NetCoreAppSettings(config);
             return appSettings;
         }
+
+        public class EmailConfig
+        {
+            public string From { get; set; }
+            public string Subject { get; set; }
+        }
+
+        [Test]
+        public void Can_populate_typed_config()
+        {
+            var appSettings = GetAppSettings();
+            var emailConfig = appSettings.Get<EmailConfig>("Email");
+            Assert.That(emailConfig.From, Is.EqualTo("test@email.com"));
+            Assert.That(emailConfig.Subject, Is.EqualTo("The Subject"));
+        }
+
     }
 #endif
 
@@ -277,6 +295,7 @@ ObjectKey {SomeSetting:Test,SomeOtherSetting:12,FinalSetting:Final}";
                 {"BadDictionaryKey", "A1,B:"},
                 {"ObjectNoLineFeed", "{SomeSetting:Test,SomeOtherSetting:12,FinalSetting:Final}"},
                 {"ObjectWithLineFeed", "{SomeSetting:Test,\r\nSomeOtherSetting:12,\r\nFinalSetting:Final}"},
+                {"Email","{From:test@email.com,Subject:The Subject}"},
             };
         }
 
@@ -364,6 +383,17 @@ ObjectKey {SomeSetting:Test,SomeOtherSetting:12,FinalSetting:Final}";
             Assert.That(value, Has.Count.EqualTo(5));
             Assert.That(value.Keys, Is.EqualTo(new List<string> { "A", "B", "C", "D", "E" }));
             Assert.That(value.Values, Is.EqualTo(new List<string> { "1", "2", "3", "4", "5" }));
+        }
+        
+        [Test]
+        public void GetKeyValuePairs_Parses_Dictionary_From_Setting()
+        {
+            var appSettings = GetAppSettings();
+            var kvps = appSettings.GetKeyValuePairs("DictionaryKey");
+
+            Assert.That(kvps, Has.Count.EqualTo(5));
+            Assert.That(kvps.Map(x => x.Key), Is.EqualTo(new List<string> { "A", "B", "C", "D", "E" }));
+            Assert.That(kvps.Map(x => x.Value), Is.EqualTo(new List<string> { "1", "2", "3", "4", "5" }));
         }
 
         [Test]
@@ -475,6 +505,20 @@ ObjectKey {SomeSetting:Test,SomeOtherSetting:12,FinalSetting:Final}";
             var badKeys = appSettings.GetAllKeys().Where(x => x.Matches("Bad*"));
 
             Assert.That(badKeys, Is.EquivalentTo(new[] { "BadIntegerKey", "BadDictionaryKey" }));
+        }
+ 
+        [Test]
+        public void Can_set_and_get_strings()
+        {
+            var exampleUrl = "https://www.example.org";
+            var appSettings = GetAppSettings();
+            appSettings.Set("url", exampleUrl);
+            var url = appSettings.Get<string>("url");
+            
+            Assert.That(url, Is.EqualTo(exampleUrl));
+
+            url = appSettings.GetString("url");
+            Assert.That(url, Is.EqualTo(exampleUrl));
         }
     }
 }

@@ -14,7 +14,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
 {
     public class HttpErrorAsyncJsonServiceClientTests : HttpErrorAsyncTests
     {
-        public override IRestClientAsync CreateRestClient(string baseUri = null)
+        public override IHttpRestClientAsync CreateRestClient(string baseUri = null)
         {
             return baseUri != null
                 ? new JsonServiceClient(baseUri)
@@ -24,7 +24,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
 
     public class HttpErrorAsyncJsonHttpClientTests : HttpErrorAsyncTests
     {
-        public override IRestClientAsync CreateRestClient(string baseUri = null)
+        public override IHttpRestClientAsync CreateRestClient(string baseUri = null)
         {
             return baseUri != null
                 ? new JsonHttpClient(baseUri)
@@ -53,7 +53,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             appHost.Dispose();
         }
 
-        public abstract IRestClientAsync CreateRestClient(string baseUri = null);
+        public abstract IHttpRestClientAsync CreateRestClient(string baseUri = null);
 
         [Test]
         public async Task GET_returns_ArgumentNullException()
@@ -150,7 +150,8 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 Assert.That(((WebException)innerEx).Status, Is.EqualTo(WebExceptionStatus.NameResolutionFailure));
 #else
                 Assert.That(innerEx.Message, Is.EqualTo("Couldn't resolve host name")
-                                            .Or.EqualTo("The server name or address could not be resolved")); // .NET Core
+                                            .Or.EqualTo("No such host is known")                              // .NET Core 2.1
+                                            .Or.EqualTo("The server name or address could not be resolved")); // .NET Core 2.0
 #endif        
             }
             catch (WebException ex) //JsonServiceClient

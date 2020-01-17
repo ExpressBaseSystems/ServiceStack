@@ -1,13 +1,15 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Threading.Tasks;
 using System.Web.UI;
 using ServiceStack.Host;
-using ServiceStack.Templates;
 using ServiceStack.Text;
 using ServiceStack.Web;
 
 namespace ServiceStack.Metadata
 {
-    public class IndexOperationsControl : System.Web.UI.Control
+    public class IndexOperationsControl 
     {
         public IRequest Request { get; set; }
         public string Title { get; set; }
@@ -118,7 +120,7 @@ namespace ServiceStack.Metadata
             return icons;
         }
 
-        protected override void Render(HtmlTextWriter output)
+        public Task RenderAsync(Stream output)
         {
             var operationsPart = new TableTemplate
             {
@@ -181,12 +183,18 @@ namespace ServiceStack.Metadata
 
             var errorCount = HostContext.AppHost.StartUpErrors.Count;
             var plural = errorCount > 1 ? "s" : "";
-            var startupErrors = HostContext.DebugMode && errorCount > 0
-                ? $"<div class='error-popup'><a href='?debug=requestinfo'>Review {errorCount} Error{plural} on Startup</a></div>"
-                : "";
+            var startupErrors = "";
+            if (HostContext.DebugMode)
+            {
+                startupErrors = errorCount > 0
+                    ? $"<div class='error-popup'><a href='?debug=requestinfo'>Review {errorCount} Error{plural} on Startup</a></div>"
+                    : LicenseUtils.LicenseWarningMessage != null 
+                        ? $"<div class='error-popup'>{LicenseUtils.LicenseWarningMessage}</div>"                
+                        : "";
+            }
 
-            var renderedTemplate = HtmlTemplates.Format(
-                HtmlTemplates.GetIndexOperationsTemplate(),
+            var renderedTemplate = Templates.HtmlTemplates.Format(
+                Templates.HtmlTemplates.GetIndexOperationsTemplate(),
                 this.Title,
                 this.XsdServiceTypesIndex,
                 operationsPart,
@@ -197,7 +205,7 @@ namespace ServiceStack.Metadata
                 Env.VersionString,
                 startupErrors);
 
-            output.Write(renderedTemplate);
+            return output.WriteAsync(renderedTemplate);
         }
 
         public Dictionary<string, string> ToAbsoluteUrls(Dictionary<string, string> linksMap)
@@ -207,7 +215,9 @@ namespace ServiceStack.Metadata
 
             foreach (var entry in linksMap)
             {
-                var url = baseUrl.CombineWith(entry.Key);
+                var url = entry.Key.IndexOf("://", StringComparison.Ordinal) >= 0 
+                    ? entry.Key
+                    : baseUrl.CombineWith(entry.Key);
                 to[url] = entry.Value;
             }
 

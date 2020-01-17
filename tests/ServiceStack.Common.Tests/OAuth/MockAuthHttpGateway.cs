@@ -131,6 +131,26 @@ namespace ServiceStack.Common.Tests.OAuth
                 Tokens.FirstName, Tokens.LastName, Tokens.Email);
         }
 
+        public bool VerifyGoogleAccessToken(string consumerKey, string accessToken)
+        {
+            throw new System.NotImplementedException();
+        }
+
+        public string DownloadGoogleUserInfo(string accessToken)
+        {
+            throw new System.NotImplementedException();
+        }
+
+        public string DownloadMicrosoftUserInfo(string accessToken)
+        {
+            throw new System.NotImplementedException();
+        }
+
+        public string CreateMicrosoftPhotoUrl(string accessToken, string savePhotoSize = null)
+        {
+            throw new System.NotImplementedException();
+        }
+
         public string DownloadYammerUserInfo(string yammerUserId)
         {
             yammerUserId.ThrowIfNullOrEmpty("yammerUserId");
@@ -150,7 +170,7 @@ namespace ServiceStack.Common.Tests.OAuth
         }
 
         public bool VerifyTwitterAccessToken(string consumerKey, string consumerSecret, string accessToken, string accessTokenSecret,
-            out string userId)
+            out string userId, out string email)
         {
             throw new System.NotImplementedException();
         }

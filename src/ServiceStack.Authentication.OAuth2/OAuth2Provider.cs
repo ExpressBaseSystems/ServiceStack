@@ -9,6 +9,7 @@ using ServiceStack.Configuration;
 
 namespace ServiceStack.Authentication.OAuth2
 {
+    [Obsolete("Use built-in OAuth2Provider in ServiceStack.Auth")]
     public abstract class OAuth2Provider : AuthProvider
     {
         protected OAuth2Provider(IAppSettings appSettings, string realm, string provider)
@@ -70,7 +71,7 @@ namespace ServiceStack.Authentication.OAuth2
         {
             var tokens = this.Init(authService, ref session, request);
 
-            //Transfering AccessToken/Secret from Mobile/Desktop App to Server
+            //Transferring AccessToken/Secret from Mobile/Desktop App to Server
             if (request?.AccessToken != null)
             {
                 if (VerifyAccessToken == null)
@@ -212,9 +213,14 @@ namespace ServiceStack.Authentication.OAuth2
                 tokens.Email = authInfo["email"];
                 userSession.UserAuthName = tokens.Email;
 
-                string profileUrl;
-                if (authInfo.TryGetValue("picture", out profileUrl))
+                if (authInfo.TryGetValue("picture", out var profileUrl) 
+                    || authInfo.TryGetValue(AuthMetadataProvider.ProfileUrlKey, out profileUrl))
+                {
                     tokens.Items[AuthMetadataProvider.ProfileUrlKey] = profileUrl;
+                    
+                    if (string.IsNullOrEmpty(userSession.ProfileUrl))
+                        userSession.ProfileUrl = profileUrl.SanitizeOAuthUrl();
+                }
 
                 this.LoadUserOAuthProvider(userSession, tokens);
             }
