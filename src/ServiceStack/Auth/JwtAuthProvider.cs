@@ -120,8 +120,8 @@ namespace ServiceStack.Auth
             return bearerToken;
         }
 
-        public string CreateJwtRefreshToken(string userId, TimeSpan expireRefreshTokenIn) => CreateJwtRefreshToken(null, userId, expireRefreshTokenIn);
-        public string CreateJwtRefreshToken(IRequest req, string userId, TimeSpan expireRefreshTokenIn)
+        public virtual string CreateJwtRefreshToken(string userId, TimeSpan expireRefreshTokenIn) => CreateJwtRefreshToken(null, userId, expireRefreshTokenIn);
+        public virtual string CreateJwtRefreshToken(IRequest req, string userId, TimeSpan expireRefreshTokenIn)
         {
             var jwtHeader = new JsonObject
             {
